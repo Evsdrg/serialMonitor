@@ -1,0 +1,22 @@
+This product includes software developed by third parties.
+
+========================================================================
+PyQt6
+========================================================================
+Copyright (c) Riverbank Computing Limited.
+Licensed under the GNU General Public License v3.0.
+https://www.riverbankcomputing.com/software/pyqt/
+
+========================================================================
+pyserial
+========================================================================
+Copyright (c) 2001-2020 Chris Liechti <cliechti@gmx.net> All Rights Reserved.
+Licensed under the BSD-3-Clause License.
+https://github.com/pyserial/pyserial
+
+========================================================================
+PyInstaller
+========================================================================
+Copyright (c) 2010-2024 PyInstaller Development Team.
+Licensed under the GNU General Public License v2.0 (with bootloader exception).
+https://pyinstaller.org/
