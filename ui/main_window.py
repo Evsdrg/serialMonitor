@@ -292,8 +292,16 @@ class SerialMonitor(QMainWindow):
         self.send_button = QPushButton()
         self.send_button.clicked.connect(self.send_data)
         
+        # 行尾符下拉框
+        self.line_ending_label = QLabel()
+        self.line_ending_combo = QComboBox()
+        self.line_ending_combo.addItems(['', '\n', '\r\n', '\r'])  # 值
+        self.line_ending_combo.setFixedWidth(120)
+        
         self.send_layout.addWidget(self.message_label)
         self.send_layout.addWidget(self.send_input, 4)
+        self.send_layout.addWidget(self.line_ending_label)
+        self.send_layout.addWidget(self.line_ending_combo)
         self.send_layout.addWidget(self.send_button)
         
         # 校验和区域
@@ -434,6 +442,18 @@ class SerialMonitor(QMainWindow):
         
         self.message_label.setText(self.t('message'))
         self.send_button.setText(self.t('send'))
+        
+        # 更新行尾符下拉框
+        current_ending_idx = self.line_ending_combo.currentIndex()
+        self.line_ending_combo.blockSignals(True)
+        self.line_ending_combo.clear()
+        self.line_ending_combo.addItem(self.t('line_ending_none'), '')
+        self.line_ending_combo.addItem(self.t('line_ending_lf'), '\n')
+        self.line_ending_combo.addItem(self.t('line_ending_crlf'), '\r\n')
+        self.line_ending_combo.addItem(self.t('line_ending_cr'), '\r')
+        self.line_ending_combo.setCurrentIndex(current_ending_idx)
+        self.line_ending_combo.blockSignals(False)
+        self.line_ending_label.setText(self.t('line_ending'))
         
         # 校验和相关文本
         self.auto_checksum_checkbox.setText(self.t('auto_checksum'))
@@ -675,6 +695,11 @@ class SerialMonitor(QMainWindow):
             else:
                 QMessageBox.warning(self, self.t('warning'), self.t('invalid_hex'))
             return
+
+        # 添加行尾符
+        line_ending = self.line_ending_combo.currentData()
+        if line_ending:
+            byte_values += line_ending.encode('utf-8')
 
         display_data = data
         if auto_checksum:

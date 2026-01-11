@@ -18,8 +18,8 @@ from utils.i18n import I18N
 class QuickSendPanel(QWidget):
     """快捷发送面板 - 独立窗口"""
     
-    # 信号: content, is_hex, auto_checksum, checksum_start, checksum_end_mode
-    send_requested = pyqtSignal(str, bool, bool, int, int)
+    # 信号: content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending
+    send_requested = pyqtSignal(str, bool, bool, int, int, str)
     
     def __init__(self, parent=None, language='zh'):
         super().__init__(parent, Qt.WindowType.Window)  # Qt.WindowType.Window 使其成为独立窗口
@@ -104,11 +104,11 @@ class QuickSendPanel(QWidget):
         """添加新的快捷发送项"""
         dialog = QuickSendItemDialog(self, language=self.language)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            content, is_hex, auto_checksum, checksum_start, checksum_end_mode = dialog.get_data()
-            self.add_item_to_list(content, is_hex, auto_checksum, checksum_start=checksum_start, checksum_end_mode=checksum_end_mode)
+            content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending = dialog.get_data()
+            self.add_item_to_list(content, is_hex, auto_checksum, checksum_start=checksum_start, checksum_end_mode=checksum_end_mode, line_ending=line_ending)
     
     def add_item_to_list(self, content, is_hex=False, auto_checksum=False, checked=True, 
-                          checksum_start=1, checksum_end_mode=0):
+                          checksum_start=1, checksum_end_mode=0, line_ending=''):
         """向列表添加一个快捷发送项"""
         item = QListWidgetItem()
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -119,15 +119,16 @@ class QuickSendPanel(QWidget):
             'is_hex': is_hex,
             'auto_checksum': auto_checksum,
             'checksum_start': checksum_start,
-            'checksum_end_mode': checksum_end_mode
+            'checksum_end_mode': checksum_end_mode,
+            'line_ending': line_ending
         })
         
-        display_text = self._format_display(content, is_hex, auto_checksum, checksum_start, checksum_end_mode)
+        display_text = self._format_display(content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending)
         item.setText(display_text)
         
         self.list_widget.addItem(item)
     
-    def _format_display(self, content, is_hex, auto_checksum, checksum_start=1, checksum_end_mode=0):
+    def _format_display(self, content, is_hex, auto_checksum, checksum_start=1, checksum_end_mode=0, line_ending=''):
         """格式化列表项的显示文本"""
         tags = []
         if is_hex:
@@ -138,6 +139,14 @@ class QuickSendPanel(QWidget):
                 checksum_end_mode
             ]
             tags.append(f"CK:{checksum_start}~{end_str}")
+        if line_ending:
+            # 显示行尾符
+            if line_ending == '\n':
+                tags.append("LF" if self.language == 'en' else "LF")
+            elif line_ending == '\r\n':
+                tags.append("CRLF" if self.language == 'en' else "CRLF")
+            elif line_ending == '\r':
+                tags.append("CR" if self.language == 'en' else "CR")
         
         tag_str = f"[{','.join(tags)}] " if tags else ""
         return f"{tag_str}{content}"
@@ -161,19 +170,21 @@ class QuickSendPanel(QWidget):
             is_hex=data['is_hex'],
             auto_checksum=data['auto_checksum'],
             checksum_start=data.get('checksum_start', 1),
-            checksum_end_mode=data.get('checksum_end_mode', 0)
+            checksum_end_mode=data.get('checksum_end_mode', 0),
+            line_ending=data.get('line_ending', '')
         )
         
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            content, is_hex, auto_checksum, checksum_start, checksum_end_mode = dialog.get_data()
+            content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending = dialog.get_data()
             item.setData(Qt.ItemDataRole.UserRole, {
                 'content': content,
                 'is_hex': is_hex,
                 'auto_checksum': auto_checksum,
                 'checksum_start': checksum_start,
-                'checksum_end_mode': checksum_end_mode
+                'checksum_end_mode': checksum_end_mode,
+                'line_ending': line_ending
             })
-            item.setText(self._format_display(content, is_hex, auto_checksum, checksum_start, checksum_end_mode))
+            item.setText(self._format_display(content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending))
     
     def _show_context_menu(self, pos):
         """显示右键菜单"""
@@ -214,7 +225,8 @@ class QuickSendPanel(QWidget):
                 data['is_hex'],
                 data['auto_checksum'],
                 data.get('checksum_start', 1),
-                data.get('checksum_end_mode', 0)
+                data.get('checksum_end_mode', 0),
+                data.get('line_ending', '')
             )
     
     def _start_sequence_send(self):
@@ -282,5 +294,6 @@ class QuickSendPanel(QWidget):
                 auto_checksum=data.get('auto_checksum', False),
                 checked=data.get('checked', True),
                 checksum_start=data.get('checksum_start', 1),
-                checksum_end_mode=data.get('checksum_end_mode', 0)
+                checksum_end_mode=data.get('checksum_end_mode', 0),
+                line_ending=data.get('line_ending', '')
             )

@@ -63,7 +63,7 @@ class QuickSendManager:
         
         self.panel.move(panel_x, panel_y)
 
-    def send_item(self, content, is_hex, auto_checksum, checksum_start=1, checksum_end_mode=0):
+    def send_item(self, content, is_hex, auto_checksum, checksum_start=1, checksum_end_mode=0, line_ending=''):
         """处理快捷发送请求"""
         if not self.main_window.serial_handler.is_open():
             QMessageBox.warning(self.main_window, self.main_window.t('warning'), self.main_window.t('not_connected'))
@@ -71,6 +71,10 @@ class QuickSendManager:
         
         try:
             byte_values = parse_payload(content, is_hex=is_hex)
+
+            # 添加行尾符
+            if line_ending:
+                byte_values += line_ending.encode('utf-8')
 
             content_display = content
             if auto_checksum:

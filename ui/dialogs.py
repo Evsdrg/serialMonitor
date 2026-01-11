@@ -43,15 +43,15 @@ class QuickSendItemDialog(QDialog):
     """快捷发送项编辑对话框"""
     
     def __init__(self, parent=None, language='zh', content='', is_hex=False, 
-                 auto_checksum=False, checksum_start=1, checksum_end_mode=0):
+                 auto_checksum=False, checksum_start=1, checksum_end_mode=0, line_ending=''):
         super().__init__(parent)
         self.language = language
-        self.init_ui(content, is_hex, auto_checksum, checksum_start, checksum_end_mode)
+        self.init_ui(content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending)
 
     def t(self, key):
         return I18N.get(self.language, key)
     
-    def init_ui(self, content, is_hex, auto_checksum, checksum_start, checksum_end_mode):
+    def init_ui(self, content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending):
         self.setWindowTitle(self.t('edit_item'))
         
         self.setMinimumWidth(450)
@@ -103,6 +103,25 @@ class QuickSendItemDialog(QDialog):
         checksum_range_layout.addWidget(self.checksum_end_combo)
         checksum_range_layout.addStretch()
         
+        # 行尾符设置
+        line_ending_layout = QHBoxLayout()
+        line_ending_label = QLabel(self.t('line_ending'))
+        self.line_ending_combo = QComboBox()
+        self.line_ending_combo.addItem(self.t('line_ending_none'), '')
+        self.line_ending_combo.addItem(self.t('line_ending_lf'), '\n')
+        self.line_ending_combo.addItem(self.t('line_ending_crlf'), '\r\n')
+        self.line_ending_combo.addItem(self.t('line_ending_cr'), '\r')
+        # 根据 line_ending 参数设置当前选择
+        current_idx = 0
+        for i in range(self.line_ending_combo.count()):
+            if self.line_ending_combo.itemData(i) == line_ending:
+                current_idx = i
+                break
+        self.line_ending_combo.setCurrentIndex(current_idx)
+        line_ending_layout.addWidget(line_ending_label)
+        line_ending_layout.addWidget(self.line_ending_combo)
+        line_ending_layout.addStretch()
+        
         # 按钮
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -113,6 +132,7 @@ class QuickSendItemDialog(QDialog):
         layout.addLayout(content_layout)
         layout.addLayout(options_layout)
         layout.addLayout(checksum_range_layout)
+        layout.addLayout(line_ending_layout)
         layout.addWidget(button_box)
     
     def get_data(self):
@@ -122,5 +142,6 @@ class QuickSendItemDialog(QDialog):
             self.hex_checkbox.isChecked(),
             self.checksum_checkbox.isChecked(),
             self.checksum_start_spinbox.value(),
-            self.checksum_end_combo.currentIndex()  # 0=末尾, 1=-1, 2=-2, 3=-3, 4=-4
+            self.checksum_end_combo.currentIndex(),  # 0=末尾, 1=-1, 2=-2, 3=-3, 4=-4
+            self.line_ending_combo.currentData()  # 行尾符
         )

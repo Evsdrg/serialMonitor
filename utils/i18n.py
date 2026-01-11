@@ -97,6 +97,11 @@ class I18N:
             'ck_end_minus_2': '-2（最后2字节为帧尾）',
             'ck_end_minus_3': '-3（最后3字节为帧尾）',
             'ck_end_minus_4': '-4（最后4字节为帧尾）',
+            'line_ending': '行尾符:',
+            'line_ending_none': '无',
+            'line_ending_lf': '\\n (LF)',
+            'line_ending_crlf': '\\r\\n (CRLF)',
+            'line_ending_cr': '\\r (CR)',
             'help': '使用说明',
             'help_content': """
 # 使用说明
@@ -226,6 +231,11 @@ class I18N:
             'ck_end_minus_2': '-2 (last 2 bytes are tail)',
             'ck_end_minus_3': '-3 (last 3 bytes are tail)',
             'ck_end_minus_4': '-4 (last 4 bytes are tail)',
+            'line_ending': 'Line Ending:',
+            'line_ending_none': 'None',
+            'line_ending_lf': '\\n (LF)',
+            'line_ending_crlf': '\\r\\n (CRLF)',
+            'line_ending_cr': '\\r (CR)',
             'help': 'Help',
             'help_content': """
 # User Manual
