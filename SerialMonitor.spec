@@ -33,6 +33,7 @@ a = Analysis(
         'utils',
         'utils.config_manager',
         'utils.i18n',
+        'utils.logger',
         'utils.theme',
     ],
     hookspath=[],

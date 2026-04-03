@@ -6,14 +6,12 @@ Copyright (C) 2026 cpevor. Licensed under GPL v3.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 
-if TYPE_CHECKING:
-    from ui.quick_send_panel import QuickSendPanel
-
+from ui.quick_send_panel import QuickSendPanel
 from utils.config_manager import ConfigManager
 from core.protocol import parse_payload, apply_checksum
 

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
 from ui.main_window import SerialMonitor
+from utils.logger import setup_logging
 
 
 def _suppress_stderr() -> int | None:
@@ -60,6 +61,8 @@ def _set_app_icon(app: QApplication) -> None:
 
 
 def main() -> None:
+    setup_logging()
+
     old_stderr = _suppress_stderr()
     app = QApplication(sys.argv)
     _restore_stderr(old_stderr)
