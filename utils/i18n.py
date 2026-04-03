@@ -4,11 +4,15 @@
 Copyright (C) 2026 cpevor. Licensed under GPL v3.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 
 class I18N:
     """多语言文本管理类"""
 
-    TEXTS = {
+    TEXTS: dict[str, dict[str, str]] = {
         "zh": {
             "window_title": "串口监视器",
             "port_config": "端口配置",
@@ -283,25 +287,27 @@ To prevent high memory usage, old logs are automatically trimmed.
         },
     }
 
-    def __init__(self, language="zh"):
-        self.language = language
+    def __init__(self, language: str = "zh") -> None:
+        self.language: str = language
 
     @classmethod
-    def get(cls, language, key, *args):
+    def get(cls, language: str, key: str, *args: Any) -> str:
         """获取翻译文本，支持格式化参数（类方法）"""
-        text = cls.TEXTS.get(language, cls.TEXTS["zh"]).get(key, key)
+        lang_dict = cls.TEXTS.get(language) or cls.TEXTS["zh"]
+        text: str = lang_dict.get(key, key)
         if args:
             return text.format(*args)
         return text
 
-    def t(self, key, *args):
+    def t(self, key: str, *args: Any) -> str:
         """获取翻译文本（实例方法）"""
-        text = self.TEXTS.get(self.language, self.TEXTS["zh"]).get(key, key)
+        lang_dict = self.TEXTS.get(self.language) or self.TEXTS["zh"]
+        text: str = lang_dict.get(key, key)
         if args:
             return text.format(*args)
         return text
 
-    def toggle(self):
+    def toggle(self) -> str:
         """切换语言"""
         self.language = "en" if self.language == "zh" else "zh"
         return self.language
