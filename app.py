@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
-Serial Monitor - A GUI-based serial terminal for Linux
+Serial Monitor - A GUI-based serial terminal
 串口监视器 - 基于 PyQt6 的串口调试工具
-
-模块化版本入口点
 
 Copyright (C) 2026 cpevor
 This program is free software: you can redistribute it and/or modify
@@ -11,56 +9,69 @@ it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 """
+
 import sys
 import os
+from pathlib import Path
 
-# 抑制 Qt 在 Wayland 下的警告信息
-os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false;kf.*=false'
+os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.*=false;kf.*=false"
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
 from ui.main_window import SerialMonitor
 
-def main():
-    # 抑制 QApplication 初始化时的 QFont 警告
-    if not os.environ.get('DEBUG'):
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        old_stderr = os.dup(2)
-        os.dup2(devnull, 2)
-        os.close(devnull)
-    
+
+def _suppress_stderr() -> int | None:
+    """抑制 QApplication 初始化时的 QFont 警告，返回原始 stderr fd。"""
+    if os.environ.get("DEBUG"):
+        return None
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stderr = os.dup(2)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    return old_stderr
+
+
+def _restore_stderr(old_stderr: int | None) -> None:
+    """恢复 stderr。"""
+    if old_stderr is None:
+        return
+    os.dup2(old_stderr, 2)
+    os.close(old_stderr)
+
+
+def _set_app_icon(app: QApplication) -> None:
+    """设置应用程序图标。"""
+    script_dir = Path(__file__).resolve().parent
+    icon_files = ["终端.png", "favicon.ico"]
+
+    for directory in (script_dir, Path.cwd()):
+        for icon_file in icon_files:
+            icon_path = directory / icon_file
+            if icon_path.exists():
+                try:
+                    icon = QIcon(str(icon_path))
+                    if not icon.isNull():
+                        app.setWindowIcon(icon)
+                        return
+                except Exception:
+                    continue
+
+
+def main() -> None:
+    old_stderr = _suppress_stderr()
     app = QApplication(sys.argv)
-    
-    # 恢复 stderr
-    if not os.environ.get('DEBUG'):
-        os.dup2(old_stderr, 2)
-        os.close(old_stderr)
-    
-    # 设置应用程序图标
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    icon_files = ['终端.png', 'favicon.ico']
-    
-    icon_paths = [os.path.join(script_dir, icon_file) for icon_file in icon_files]
-    icon_paths.extend([os.path.join(os.getcwd(), icon_file) for icon_file in icon_files])
-    
+    _restore_stderr(old_stderr)
+
     app.setApplicationName("Serial Monitor")
     app.setApplicationDisplayName("Serial Monitor")
-    
-    for icon_path in icon_paths:
-        if os.path.exists(icon_path):
-            try:
-                app_icon = QIcon(icon_path)
-                if not app_icon.isNull():
-                    app.setWindowIcon(app_icon)
-                    break
-            except:
-                pass
-    
+    _set_app_icon(app)
+
     monitor = SerialMonitor()
     monitor.show()
     sys.exit(app.exec())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

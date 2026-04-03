@@ -3,9 +3,17 @@
 
 Copyright (C) 2026 cpevor. Licensed under GPL v3.
 """
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
 import serial
 import serial.tools.list_ports
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+logger = logging.getLogger(__name__)
 
 
 class _SerialReadThread(QThread):
@@ -14,15 +22,15 @@ class _SerialReadThread(QThread):
     data_received = pyqtSignal(bytes)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, serial_port):
+    def __init__(self, serial_port: serial.Serial) -> None:
         super().__init__()
         self._serial_port = serial_port
         self._running = True
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
 
-    def run(self):
+    def run(self) -> None:  # noqa: D401
         while self._running:
             try:
                 data = self._serial_port.read(4096)
@@ -32,73 +40,82 @@ class _SerialReadThread(QThread):
                 self.error_occurred.emit(str(e))
                 return
             except Exception as e:
+                logger.exception("Unexpected error in serial read thread")
                 self.error_occurred.emit(str(e))
                 return
 
 
 class SerialHandler(QObject):
     """串口通信处理类"""
-    
-    # 信号定义
-    data_received = pyqtSignal(bytes)  # 收到数据
-    connection_changed = pyqtSignal(bool, str)  # 连接状态改变 (is_connected, port_name)
-    error_occurred = pyqtSignal(str)  # 发生错误
-    
-    def __init__(self):
+
+    data_received = pyqtSignal(bytes)
+    connection_changed = pyqtSignal(bool, str)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self) -> None:
         super().__init__()
-        self.serial_port = None
-        self.current_port = None
-        self.last_error = None
-        self._reader_thread = None
-    
+        self.serial_port: Optional[serial.Serial] = None
+        self.current_port: Optional[str] = None
+        self.last_error: Optional[str] = None
+        self._reader_thread: Optional[_SerialReadThread] = None
+
     @staticmethod
-    def get_available_ports():
-        """获取可用的串口列表，ttyUSB优先"""
+    def get_available_ports() -> list[str]:
+        """获取可用的串口列表，ttyUSB 优先。"""
         ports = serial.tools.list_ports.comports()
-        sorted_ports = sorted(ports, key=lambda p: (
-            0 if 'ttyUSB' in p.device else
-            1 if 'ttyACM' in p.device else
-            2
-        ))
+        sorted_ports = sorted(
+            ports,
+            key=lambda p: (
+                0 if "ttyUSB" in p.device else 1 if "ttyACM" in p.device else 2
+            ),
+        )
         return [p.device for p in sorted_ports]
-    
-    def is_open(self):
-        """检查串口是否打开"""
+
+    def is_open(self) -> bool:
+        """检查串口是否打开。"""
         return self.serial_port is not None and self.serial_port.is_open
-    
-    def open(self, port, baudrate=115200, parity='N', databits=8, stopbits=1):
-        """
-        打开串口
-        
+
+    def open(
+        self,
+        port: str,
+        baudrate: int | str = 115200,
+        parity: str = "N",
+        databits: int | str = 8,
+        stopbits: float | str = 1,
+    ) -> bool:
+        """打开串口。
+
         Args:
-            port: 端口名称
-            baudrate: 波特率
-            parity: 校验位 ('N', 'E', 'O')
-            databits: 数据位 (5, 6, 7, 8)
-            stopbits: 停止位 (1, 1.5, 2)
+            port: 端口名称。
+            baudrate: 波特率。
+            parity: 校验位 ('N', 'E', 'O', 'None', 'Even', 'Odd')。
+            databits: 数据位 (5, 6, 7, 8)。
+            stopbits: 停止位 (1, 1.5, 2)。
+
+        Returns:
+            是否成功打开。
         """
         if self.is_open():
             return True
-        
-        # 转换参数
-        parity_map = {
-            'N': serial.PARITY_NONE,
-            'None': serial.PARITY_NONE,
-            'E': serial.PARITY_EVEN,
-            'Even': serial.PARITY_EVEN,
-            'O': serial.PARITY_ODD,
-            'Odd': serial.PARITY_ODD
+
+        parity_map: dict[str, str] = {
+            "N": serial.PARITY_NONE,
+            "None": serial.PARITY_NONE,
+            "E": serial.PARITY_EVEN,
+            "Even": serial.PARITY_EVEN,
+            "O": serial.PARITY_ODD,
+            "Odd": serial.PARITY_ODD,
         }
-        
-        stopbits_map = {
+
+        stopbits_map: dict[str | float, float] = {
             1: serial.STOPBITS_ONE,
-            '1': serial.STOPBITS_ONE,
+            "1": serial.STOPBITS_ONE,
             1.5: serial.STOPBITS_ONE_POINT_FIVE,
-            '1.5': serial.STOPBITS_ONE_POINT_FIVE,
+            "1.5": serial.STOPBITS_ONE_POINT_FIVE,
             2: serial.STOPBITS_TWO,
-            '2': serial.STOPBITS_TWO
+            "2": serial.STOPBITS_TWO,
         }
-        
+
         try:
             self.serial_port = serial.Serial(
                 port=port,
@@ -106,22 +123,20 @@ class SerialHandler(QObject):
                 parity=parity_map.get(parity, serial.PARITY_NONE),
                 stopbits=stopbits_map.get(stopbits, serial.STOPBITS_ONE),
                 bytesize=int(databits),
-                timeout=0.1  # 线程内阻塞读，便于退出
+                timeout=0.1,
             )
             self.current_port = port
             self.last_error = None
 
-            # 启动后台读取线程
             self._start_reader()
-
             self.connection_changed.emit(True, port)
             return True
-        except Exception as e:
+        except (OSError, serial.SerialException) as e:
             self.last_error = str(e)
             self.error_occurred.emit(str(e))
             return False
 
-    def _start_reader(self):
+    def _start_reader(self) -> None:
         self._stop_reader()
         if not self.serial_port:
             return
@@ -130,7 +145,7 @@ class SerialHandler(QObject):
         self._reader_thread.error_occurred.connect(self._on_reader_error)
         self._reader_thread.start()
 
-    def _stop_reader(self):
+    def _stop_reader(self) -> None:
         if self._reader_thread is None:
             return
         try:
@@ -139,102 +154,76 @@ class SerialHandler(QObject):
         finally:
             self._reader_thread = None
 
-    def _on_reader_error(self, message: str):
+    def _on_reader_error(self, message: str) -> None:
         self.last_error = message
-        # reader 出错时认为连接已失效
         self.close()
         self.error_occurred.emit(message)
-    
-    def close(self):
-        """关闭串口"""
+
+    def close(self) -> None:
+        """关闭串口。"""
         self._stop_reader()
         if self.serial_port:
             try:
                 if self.serial_port.is_open:
                     self.serial_port.close()
-            except:
-                pass
-            
+            except (OSError, serial.SerialException) as e:
+                logger.warning("Error closing serial port: %s", e)
+
             port = self.current_port
             self.serial_port = None
-            self.connection_changed.emit(False, port or '')
+            self.connection_changed.emit(False, port or "")
 
-    def set_dtr(self, level: bool):
-        """设置 DTR 引脚电平"""
+    def set_dtr(self, level: bool) -> None:
+        """设置 DTR 引脚电平。"""
         if self.is_open():
             try:
-                self.serial_port.dtr = level
-            except:
-                pass
+                self.serial_port.dtr = level  # type: ignore[union-attr]
+            except (OSError, serial.SerialException) as e:
+                logger.debug("Failed to set DTR: %s", e)
 
-    def set_rts(self, level: bool):
-        """设置 RTS 引脚电平"""
+    def set_rts(self, level: bool) -> None:
+        """设置 RTS 引脚电平。"""
         if self.is_open():
             try:
-                self.serial_port.rts = level
-            except:
-                pass
-    
-    def read_data(self):
-        """
-        读取串口数据
-        
-        Returns:
-            bytes or None
-        """
-        if not self.is_open():
-            return None
-        
-        try:
-            if self.serial_port.in_waiting > 0:
-                return self.serial_port.read_all()
-        except (OSError, serial.SerialException) as e:
-            self.last_error = str(e)
-            self.close()
-            self.error_occurred.emit(str(e))
-        except Exception as e:
-            self.last_error = str(e)
-            self.error_occurred.emit(str(e))
-        
-        return None
-    
-    def write_data(self, data):
-        """
-        写入数据到串口
-        
+                self.serial_port.rts = level  # type: ignore[union-attr]
+            except (OSError, serial.SerialException) as e:
+                logger.debug("Failed to set RTS: %s", e)
+
+    def write_data(self, data: bytes) -> bool:
+        """写入数据到串口。
+
         Args:
-            data: bytes 数据
-            
+            data: 要发送的字节数据。
+
         Returns:
-            bool: 是否成功
+            是否成功写入。
         """
         if not self.is_open():
             return False
-        
+
         try:
-            self.serial_port.write(data)
+            self.serial_port.write(data)  # type: ignore[union-attr]
             self.last_error = None
             return True
-        except Exception as e:
+        except (OSError, serial.SerialException) as e:
             self.last_error = str(e)
             self.error_occurred.emit(str(e))
             return False
-    
-    def check_device_exists(self):
-        """检查当前连接的设备是否还存在"""
+
+    def check_device_exists(self) -> bool:
+        """检查当前连接的设备是否还存在。"""
         if not self.current_port:
             return False
         return self.current_port in self.get_available_ports()
-    
+
     @staticmethod
-    def calculate_checksum(data):
-        """
-        计算校验和 (所有字节之和 mod 256)
-        
+    def calculate_checksum(data: bytes) -> int:
+        """计算校验和 (所有字节之和 mod 256)。
+
         Args:
-            data: bytes 数据
-            
+            data: bytes 数据。
+
         Returns:
-            int: 校验和值 (0-255)
+            校验和值 (0-255)。
         """
         return sum(data) & 0xFF

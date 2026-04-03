@@ -72,7 +72,13 @@ venv.bak/
 
 # User runtime configuration (Local setting files)
 config/*.json
-!config/.gitkeep  # We will create this trick to keep the folder but ignore files
+!config/.gitkeep
+
+# Ruff
+.ruff_cache/
+
+# UV
+.venv/.lock
 
 # OS generated files
 .DS_Store

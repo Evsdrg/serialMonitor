@@ -1,20 +1,56 @@
 # -*- mode: python ; coding: utf-8 -*-
+# SerialMonitor PyInstaller spec file
+
+block_cipher = None
 
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('终端.png', '.')],
-    hiddenimports=[],
+    datas=[
+        ('终端.png', '.'),
+        ('config', 'config'),
+    ],
+    hiddenimports=[
+        'PyQt6',
+        'PyQt6.QtCore',
+        'PyQt6.QtGui',
+        'PyQt6.QtWidgets',
+        'serial',
+        'serial.tools',
+        'serial.tools.list_ports',
+        'core',
+        'core.ansi',
+        'core.serial_handler',
+        'core.ansi_parser',
+        'core.protocol',
+        'ui',
+        'ui.main_window',
+        'ui.dialogs',
+        'ui.quick_send_manager',
+        'ui.quick_send_panel',
+        'ui.terminal_emulator',
+        'utils',
+        'utils.config_manager',
+        'utils.i18n',
+        'utils.theme',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'tkinter',
+        'unittest',
+        'email',
+        'http',
+        'xml',
+        'pydoc',
+    ],
     noarchive=False,
     optimize=0,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
