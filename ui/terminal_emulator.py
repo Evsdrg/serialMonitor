@@ -50,6 +50,8 @@ class TerminalEmulator(QTextEdit):
 
     key_pressed = pyqtSignal(bytes)
 
+    _SCROLL_MARGIN: int = 5
+
     def __init__(
         self,
         rows: int = 24,
@@ -385,7 +387,7 @@ class TerminalEmulator(QTextEdit):
         self._dirty = False
 
         sb = self.verticalScrollBar()
-        at_bottom = sb and sb.value() >= sb.maximum() - 5
+        at_bottom = sb and sb.value() >= sb.maximum() - self._SCROLL_MARGIN
 
         cursor = QTextCursor(self.document())
         cursor.select(QTextCursor.MoveOperation.Document)
