@@ -1,13 +1,19 @@
 """
+主题颜色配置管理
+
 Copyright (C) 2026 cpevor. Licensed under GPL v3.
 """
+
+from __future__ import annotations
+
 from PyQt6.QtGui import QPalette, QColor
+
 
 class Theme:
     """主题颜色配置管理"""
-    
+
     @staticmethod
-    def get_light_palette():
+    def get_light_palette() -> QPalette:
         """获取明亮主题调色板"""
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
@@ -26,7 +32,7 @@ class Theme:
         return palette
 
     @staticmethod
-    def get_dark_palette():
+    def get_dark_palette() -> QPalette:
         """获取暗黑主题调色板"""
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
