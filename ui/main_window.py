@@ -36,13 +36,15 @@ from PyQt6.QtCore import QTimer, Qt, QUrl
 from PyQt6.QtGui import (
     QDesktopServices,
     QIcon,
+    QKeySequence,
+    QShortcut,
     QTextCursor,
     QTextCharFormat,
+    QTextDocument,
     QColor,
     QPalette,
     QAction,
 )
-from PyQt6.QtGui import QTextDocument  # noqa: F401 — used by TerminalTrimManager type hints
 
 from core.ansi_parser import AnsiParser
 from core.protocol import apply_checksum, format_hex, parse_payload
@@ -50,8 +52,9 @@ from core.serial_handler import SerialHandler
 from ui.quick_send_manager import QuickSendManager
 from ui.dialogs import HelpDialog
 from ui.terminal_emulator import TerminalEmulator
+from ui.search_bar import SearchBar
 from utils.i18n import I18N
-from utils.theme import Theme
+from utils.theme import Theme, is_system_dark_mode
 from utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
@@ -299,6 +302,11 @@ class SerialMonitor(QMainWindow):
         self.terminal_emulator.hide()
         self.terminal_emulator.key_pressed.connect(self._on_terminal_key)
 
+        # ── 搜索栏 ──
+        self.search_bar = SearchBar(self)
+        self.search_bar.search_requested.connect(self._do_search)
+        self.search_bar.close_requested.connect(self._close_search)
+
         # ── 控制按钮区域 ──
         ctrl_layout = QHBoxLayout()
 
@@ -419,9 +427,14 @@ class SerialMonitor(QMainWindow):
         main_layout.addWidget(self.port_group)
         main_layout.addWidget(self.terminal_display)
         main_layout.addWidget(self.terminal_emulator)
+        main_layout.addWidget(self.search_bar)
         main_layout.addLayout(ctrl_layout)
         main_layout.addLayout(send_layout)
         main_layout.addLayout(ck_layout)
+
+        # Ctrl+F 搜索快捷键
+        find_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        find_shortcut.activated.connect(self._open_search)
 
         # 设备连接检测定时器
         self.device_check_timer = QTimer()
@@ -462,11 +475,22 @@ class SerialMonitor(QMainWindow):
         if app is None:
             return
         if index == 1:
-            app.setPalette(Theme.get_light_palette())
+            palette = Theme.get_light_palette()
         elif index == 2:
-            app.setPalette(Theme.get_dark_palette())
+            palette = Theme.get_dark_palette()
         else:
-            app.setPalette(self.default_palette)
+            if is_system_dark_mode():
+                palette = Theme.get_dark_palette()
+            else:
+                palette = Theme.get_light_palette()
+
+        app.setPalette(palette)
+        self._sync_terminal_palette(palette)
+
+    def _sync_terminal_palette(self, palette: QPalette) -> None:
+        """同步终端控件的调色板，确保背景色一致。"""
+        self.terminal_display.setPalette(palette)
+        self.terminal_emulator.setPalette(palette)
 
     def update_texts(self) -> None:
         # 更新主题下拉框文本
@@ -568,6 +592,15 @@ class SerialMonitor(QMainWindow):
 
         self._rebuild_trim_menu()
         self.quick_send_manager.update_language(self.language)
+        self.search_bar.update_language(
+            {
+                "search_placeholder": self.t("search_placeholder"),
+                "search_prev": self.t("search_prev"),
+                "search_next": self.t("search_next"),
+                "search_case": self.t("search_case"),
+                "search_close": self.t("search_close"),
+            }
+        )
 
         self.send_input.setPlaceholderText(
             self.t("hex_placeholder")
@@ -657,6 +690,146 @@ class SerialMonitor(QMainWindow):
         if self.serial_handler.is_open():
             self.serial_handler.write_data(data)
 
+    # ── 搜索 ─────────────────────────────────────────────────
+
+    def _open_search(self) -> None:
+        self.search_bar.show_bar()
+
+    def _close_search(self) -> None:
+        self._clear_search_highlights()
+
+    def _do_search(self, text: str, forward: bool, case_sensitive: bool) -> None:
+        if self.terminal_mode:
+            self._search_terminal(text, forward, case_sensitive)
+        else:
+            self._search_normal(text, forward, case_sensitive)
+
+    def _search_normal(self, text: str, forward: bool, case_sensitive: bool) -> None:
+        doc = self.terminal_display.document()
+        cursor = self.terminal_display.textCursor()
+
+        find_flags = QTextDocument.FindFlag(0)
+        if not forward:
+            find_flags |= QTextDocument.FindFlag.FindBackward
+        if case_sensitive:
+            find_flags |= QTextDocument.FindFlag.FindCaseSensitively
+
+        result = doc.find(text, cursor, find_flags)
+
+        if result.isNull():
+            wrapped_cursor = QTextCursor(doc)
+            if not forward:
+                wrapped_cursor.movePosition(QTextCursor.MoveOperation.End)
+            result = doc.find(text, wrapped_cursor, find_flags)
+
+        if not result.isNull():
+            self.terminal_display.setTextCursor(result)
+            total = self._count_matches(doc, text, case_sensitive)
+            current = self._current_match_index(doc, result, text, case_sensitive)
+            self.search_bar.update_result(current, total)
+        else:
+            self.search_bar.set_no_result()
+
+    def _search_terminal(self, text: str, forward: bool, case_sensitive: bool) -> None:
+        grid = self.terminal_emulator.grid
+        rows = len(grid)
+        cols = self.terminal_emulator.cols
+
+        if not text:
+            self.search_bar.set_no_result()
+            return
+
+        matches: list[tuple[int, int]] = []
+        for r in range(rows):
+            row_text = "".join(cell.char for cell in grid[r])
+            start = 0
+            while True:
+                if case_sensitive:
+                    idx = row_text.find(text, start)
+                else:
+                    idx = row_text.lower().find(text.lower(), start)
+                if idx == -1:
+                    break
+                matches.append((r, idx))
+                start = idx + 1
+
+        if not matches:
+            self.search_bar.set_no_result()
+            self.terminal_emulator.search_highlight = None
+            self.terminal_emulator._dirty = True
+            self.terminal_emulator._schedule_render()
+            return
+
+        cur_row = self.terminal_emulator.cursor_row
+        cur_col = self.terminal_emulator.cursor_col
+
+        if forward:
+            target = None
+            for r, c in matches:
+                if (r, c) > (cur_row, cur_col):
+                    target = (r, c)
+                    break
+            if target is None:
+                target = matches[0]
+        else:
+            target = None
+            for r, c in reversed(matches):
+                if (r, c) < (cur_row, cur_col):
+                    target = (r, c)
+                    break
+            if target is None:
+                target = matches[-1]
+
+        match_idx = matches.index(target) + 1
+        self.search_bar.update_result(match_idx, len(matches))
+
+        self.terminal_emulator.search_highlight = target
+        self.terminal_emulator.cursor_row = target[0]
+        self.terminal_emulator.cursor_col = target[1]
+        self.terminal_emulator._dirty = True
+        self.terminal_emulator._schedule_render()
+
+    def _clear_search_highlights(self) -> None:
+        if self.terminal_mode:
+            self.terminal_emulator.search_highlight = None
+            self.terminal_emulator._dirty = True
+            self.terminal_emulator._schedule_render()
+
+    @staticmethod
+    def _count_matches(doc: QTextDocument, text: str, case_sensitive: bool) -> int:
+        cursor = QTextCursor(doc)
+        flags = QTextDocument.FindFlag(0)
+        if case_sensitive:
+            flags |= QTextDocument.FindFlag.FindCaseSensitively
+        count = 0
+        while True:
+            cursor = doc.find(text, cursor, flags)
+            if cursor.isNull():
+                break
+            count += 1
+        return count
+
+    @staticmethod
+    def _current_match_index(
+        doc: QTextDocument,
+        current: QTextCursor,
+        text: str,
+        case_sensitive: bool,
+    ) -> int:
+        cursor = QTextCursor(doc)
+        flags = QTextDocument.FindFlag(0)
+        if case_sensitive:
+            flags |= QTextDocument.FindFlag.FindCaseSensitively
+        idx = 0
+        while True:
+            cursor = doc.find(text, cursor, flags)
+            if cursor.isNull():
+                break
+            idx += 1
+            if cursor.selectionStart() == current.selectionStart():
+                return idx
+        return 0
+
     # ── 串口操作 ─────────────────────────────────────────────
 
     def refresh_ports(self) -> None:
@@ -708,10 +881,11 @@ class SerialMonitor(QMainWindow):
         self.update_texts()
 
     def close_serial(self, silent: bool = False, device_lost: bool = False) -> None:
-        if self.serial_handler.is_open():
+        was_open = self.serial_handler.is_open()
+        if was_open:
             self.serial_handler.close()
 
-        if not silent and not self.terminal_mode:
+        if was_open and not silent and not self.terminal_mode:
             if device_lost:
                 msg = self.t("device_disconnected").format(self.current_port) + "\n"
             else:
@@ -733,8 +907,8 @@ class SerialMonitor(QMainWindow):
         return datetime.now().strftime("[%H:%M:%S.%f")[:-3] + "] "
 
     def append_to_terminal(self, text: str, with_timestamp: bool = True) -> None:
-        current_cursor = self.terminal_display.textCursor()
-        has_selection = current_cursor.hasSelection()
+        saved_cursor = self.terminal_display.textCursor()
+        has_selection = saved_cursor.hasSelection()
 
         end_cursor = QTextCursor(self.terminal_display.document())
         end_cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -747,26 +921,24 @@ class SerialMonitor(QMainWindow):
                 self.get_timestamp(), self.ansi_parser.get_timestamp_format()
             )
 
-        self._append_text_with_ansi(text)
+        if not self.enable_ansi_colors:
+            clean_text = self.ansi_parser.strip_ansi(text)
+            cursor.insertText(clean_text)
+        else:
+            segments = self.ansi_parser.parse_text(text)
+            for segment_text, fmt in segments:
+                cursor.insertText(segment_text, fmt)
+
         cursor.endEditBlock()
 
         self.trim_manager.trim_if_needed(self.terminal_display.document())  # type: ignore[arg-type]
 
         if has_selection:
-            self.terminal_display.setTextCursor(current_cursor)
+            self.terminal_display.setTextCursor(saved_cursor)
         elif self.auto_scroll:
             self.terminal_display.moveCursor(QTextCursor.MoveOperation.End)
-
-    def _append_text_with_ansi(self, text: str) -> None:
-        if not self.enable_ansi_colors:
-            clean_text = self.ansi_parser.strip_ansi(text)
-            self.terminal_display.insertPlainText(clean_text)
-            return
-
-        segments = self.ansi_parser.parse_text(text)
-        cursor = self.terminal_display.textCursor()
-        for segment_text, fmt in segments:
-            cursor.insertText(segment_text, fmt)
+        else:
+            self.terminal_display.setTextCursor(saved_cursor)
 
     def _on_serial_data(self, data: bytes) -> None:
         if not data:
@@ -945,12 +1117,25 @@ class SerialMonitor(QMainWindow):
             self.checksum_input.setText(self.t("invalid_hex"))
             return
 
-        try:
+        auto_checksum = self.auto_checksum_checkbox.isChecked()
+        checksum_start = self.checksum_start_spinbox.value()
+        checksum_end_mode = self.checksum_end_combo.currentIndex()
+
+        if auto_checksum:
+            res = apply_checksum(
+                byte_values,
+                checksum_start_1based=checksum_start,
+                checksum_end_mode=checksum_end_mode,
+            )
+            if res.valid_range and res.checksum is not None:
+                self.checksum_input.setText(
+                    f"{res.checksum:02X} (0x{res.checksum:02X})"
+                )
+            else:
+                self.checksum_input.setText(self.t("ck_invalid_range"))
+        else:
             checksum = sum(byte_values) & 0xFF
             self.checksum_input.setText(f"{checksum:02X} (0x{checksum:02X})")
-        except Exception as e:
-            logger.error("Checksum calculation failed: %s", e)
-            self.checksum_input.setText(self.t("error"))
 
     # ── 对话框 ───────────────────────────────────────────────
 

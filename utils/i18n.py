@@ -108,6 +108,11 @@ class I18N:
             "line_ending_cr": "\\r (CR)",
             "terminal_mode_on": "终端模式",
             "terminal_mode_off": "普通模式",
+            "search_placeholder": "搜索...",
+            "search_prev": "上一个",
+            "search_next": "下一个",
+            "search_case": "区分大小写",
+            "search_close": "关闭",
             "help": "使用说明",
             "help_content": """
 # 使用说明
@@ -244,6 +249,11 @@ class I18N:
             "line_ending_cr": "\\r (CR)",
             "terminal_mode_on": "Terminal",
             "terminal_mode_off": "Normal",
+            "search_placeholder": "Search...",
+            "search_prev": "Previous",
+            "search_next": "Next",
+            "search_case": "Case sensitive",
+            "search_close": "Close",
             "help": "Help",
             "help_content": """
 # User Manual

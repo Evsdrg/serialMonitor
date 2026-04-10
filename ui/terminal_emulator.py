@@ -63,6 +63,7 @@ class TerminalEmulator(QTextEdit):
         self.cols = cols
         self.enable_ansi_colors: bool = True
         self.font_family: str = "Consolas"
+        self.search_highlight: tuple[int, int] | None = None
 
         self.setReadOnly(True)
         self.setTabChangesFocus(True)
@@ -342,10 +343,7 @@ class TerminalEmulator(QTextEdit):
             for c in range(0, self.cursor_col + 1):
                 self.grid[self.cursor_row][c] = _Cell()
         elif mode == 2 or mode == 3:
-            # 整屏清除
             self.grid = [[_Cell() for _ in range(self.cols)] for _ in range(self.rows)]
-            self.cursor_row = 0
-            self.cursor_col = 0
         self._dirty = True
 
     def _erase_line(self, mode: int) -> None:
@@ -393,10 +391,13 @@ class TerminalEmulator(QTextEdit):
         cursor.select(QTextCursor.MoveOperation.Document)
         cursor.beginEditBlock()
 
-        # 光标位置的高亮格式
         cursor_fmt = QTextCharFormat()
         cursor_fmt.setBackground(QColor(128, 128, 128))
         cursor_fmt.setForeground(QColor(255, 255, 255))
+
+        search_fmt = QTextCharFormat()
+        search_fmt.setBackground(QColor(255, 200, 0))
+        search_fmt.setForeground(QColor(0, 0, 0))
 
         for row_idx, row in enumerate(self.grid):
             if row_idx > 0:
@@ -405,6 +406,12 @@ class TerminalEmulator(QTextEdit):
             for col_idx, cell in enumerate(row):
                 if row_idx == self.cursor_row and col_idx == self.cursor_col:
                     cursor.insertText(cell.char, cursor_fmt)
+                elif (
+                    self.search_highlight is not None
+                    and row_idx == self.search_highlight[0]
+                    and col_idx == self.search_highlight[1]
+                ):
+                    cursor.insertText(cell.char, search_fmt)
                 else:
                     cursor.insertText(cell.char, QTextCharFormat(cell.fmt))
 
