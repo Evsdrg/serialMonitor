@@ -60,7 +60,7 @@ jobs:
         run: pyinstaller SerialMonitor.spec
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: SerialMonitor-linux
           path: dist/SerialMonitor
@@ -88,7 +88,7 @@ jobs:
         run: pyinstaller SerialMonitor.spec
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: SerialMonitor-windows
           path: dist/SerialMonitor.exe
