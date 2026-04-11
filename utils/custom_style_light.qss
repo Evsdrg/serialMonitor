@@ -1,0 +1,119 @@
+/* 亮色主题统一样式 - 边框统一 */
+
+QPushButton {
+    background-color: transparent;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+}
+
+QPushButton:hover {
+    background-color: rgba(226.000, 234.000, 251.000, 1.000);
+}
+
+QPushButton:pressed {
+    background-color: rgba(200.000, 210.000, 230.000, 1.000);
+}
+
+QLineEdit {
+    background-color: transparent;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+}
+
+QLineEdit:focus {
+    border: 1px solid rgba(0.000, 129.000, 219.000, 1.000);
+}
+
+QComboBox {
+    background-color: transparent;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+    icon-size: 0px;
+    combobox-popup: 0;
+}
+
+QSpinBox, QDoubleSpinBox {
+    background-color: transparent;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+}
+
+QTextEdit, QPlainTextEdit {
+    background-color: transparent;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+}
+
+QMenu {
+    background-color: rgba(255.000, 255.000, 255.000, 1.000);
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+    padding: 2px 0px;
+}
+
+QMenu::item {
+    padding: 4px 20px 4px 8px;
+    margin: 0px;
+}
+
+QMenu::item:selected {
+    background-color: rgba(226.000, 234.000, 251.000, 1.000);
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: rgba(180.000, 185.000, 190.000, 1.000);
+    margin: 4px 8px;
+}
+
+QMenu::indicator {
+    width: 14px;
+    height: 14px;
+    padding-left: 0px;
+}
+
+QMenu::indicator:non-exclusive:unchecked {
+    image: none;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+}
+
+QMenu::indicator:non-exclusive:checked {
+    image: none;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+    background-color: rgba(226.000, 234.000, 251.000, 1.000);
+}
+
+QMenu::indicator:exclusive:unchecked {
+    image: none;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+    border-radius: 3px;
+}
+
+QMenu::indicator:exclusive:checked {
+    image: none;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+    border-radius: 3px;
+    background-color: rgba(226.000, 234.000, 251.000, 1.000);
+}
+
+QMenu::sub-menu {
+    padding: 0px;
+}
+
+QMenu::sub-menu::indicator {
+    right: 8px;
+}
+
+QToolButton::menu-indicator {
+    image: none;
+}
+
+QToolButton {
+    background-color: transparent;
+    border: 1px solid rgba(180.000, 185.000, 190.000, 1.000);
+}
+
+QComboBox QAbstractItemView {
+    padding: 0px;
+    margin: 0px;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 20px;
+    padding: 0px 4px 0px 0px;
+    margin: 0px;
+}

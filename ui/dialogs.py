@@ -9,18 +9,15 @@ from __future__ import annotations
 from typing import Any
 
 from PyQt6.QtWidgets import (
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
     QCheckBox,
+    QDialog,
     QDialogButtonBox,
     QSpinBox,
     QComboBox,
     QTextBrowser,
+    QWidget,
+    QVBoxLayout,
 )
-from PyQt6.QtWidgets import QWidget
 
 from utils.i18n import I18N
 
@@ -74,7 +71,12 @@ class QuickSendItemDialog(QDialog):
         super().__init__(parent)
         self.language: str = language
         self.init_ui(
-            content, is_hex, auto_checksum, checksum_start, checksum_end_mode, line_ending
+            content,
+            is_hex,
+            auto_checksum,
+            checksum_start,
+            checksum_end_mode,
+            line_ending,
         )
 
     def t(self, key: str) -> str:

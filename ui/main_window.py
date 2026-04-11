@@ -168,6 +168,7 @@ class SerialMonitor(QMainWindow):
         self.quick_send_manager = QuickSendManager(self)
         self.manual_disconnect: bool = False
         self.terminal_mode: bool = False
+        self.current_theme: str = "dark" if is_system_dark_mode() else "light"
 
         self.ansi_parser = AnsiParser()
         self.trim_manager = TerminalTrimManager()
@@ -215,7 +216,7 @@ class SerialMonitor(QMainWindow):
         self.trim_menu_button = QToolButton()
         self.trim_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.trim_menu_button.setArrowType(Qt.ArrowType.DownArrow)
-        self.trim_menu_button.setFixedWidth(18)
+        self.trim_menu_button.setFixedSize(20, 24)
         trim_layout.addWidget(self.trim_logs_button)
         trim_layout.addWidget(self.trim_menu_button)
 
@@ -483,9 +484,15 @@ class SerialMonitor(QMainWindow):
         else:
             theme = "dark"
 
+        self.current_theme = theme
         stylesheet = qdarktheme.load_stylesheet(theme)
-        custom_style = Path("utils/custom_style.qss").read_text()
+        custom_style_file = f"utils/custom_style_{theme}.qss"
+        if Path(custom_style_file).exists():
+            custom_style = Path(custom_style_file).read_text()
+        else:
+            custom_style = Path("utils/custom_style_dark.qss").read_text()
         app.setStyleSheet(stylesheet + custom_style)
+        self._rebuild_trim_menu()
 
     def update_texts(self) -> None:
         # 更新主题下拉框文本
@@ -608,6 +615,9 @@ class SerialMonitor(QMainWindow):
 
     def _rebuild_trim_menu(self) -> None:
         menu = QMenu(self)
+        app = QApplication.instance()
+        if app is not None:
+            menu.setStyleSheet(app.styleSheet())
 
         enabled_action = menu.addAction(self.t("trim_enabled"))
         if enabled_action:

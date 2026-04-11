@@ -72,7 +72,11 @@ def main() -> None:
     theme = os.environ.get("THEME", "dark")
     stylesheet = qdarktheme.load_stylesheet(theme)
 
-    custom_style = Path("utils/custom_style.qss").read_text()
+    custom_style_file = f"utils/custom_style_{theme}.qss"
+    if Path(custom_style_file).exists():
+        custom_style = Path(custom_style_file).read_text()
+    else:
+        custom_style = Path("utils/custom_style_dark.qss").read_text()
     app.setStyleSheet(stylesheet + custom_style)
 
     app.setApplicationName("Serial Monitor")
