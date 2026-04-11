@@ -56,6 +56,7 @@ from ui.search_bar import SearchBar
 from utils.i18n import I18N
 from utils.theme import Theme, is_system_dark_mode
 from utils.config_manager import ConfigManager
+import qdarktheme
 
 logger = logging.getLogger(__name__)
 
@@ -474,23 +475,15 @@ class SerialMonitor(QMainWindow):
         app = QApplication.instance()
         if app is None:
             return
-        if index == 1:
-            palette = Theme.get_light_palette()
-        elif index == 2:
-            palette = Theme.get_dark_palette()
+
+        if index == 0:
+            theme = "dark" if is_system_dark_mode() else "light"
+        elif index == 1:
+            theme = "light"
         else:
-            if is_system_dark_mode():
-                palette = Theme.get_dark_palette()
-            else:
-                palette = Theme.get_light_palette()
+            theme = "dark"
 
-        app.setPalette(palette)
-        self._sync_terminal_palette(palette)
-
-    def _sync_terminal_palette(self, palette: QPalette) -> None:
-        """同步终端控件的调色板，确保背景色一致。"""
-        self.terminal_display.setPalette(palette)
-        self.terminal_emulator.setPalette(palette)
+        app.setStyleSheet(qdarktheme.load_stylesheet(theme))
 
     def update_texts(self) -> None:
         # 更新主题下拉框文本
