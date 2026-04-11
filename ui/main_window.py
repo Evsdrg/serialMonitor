@@ -61,6 +61,18 @@ import qdarktheme
 logger = logging.getLogger(__name__)
 
 
+def _resource_base() -> Path:
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+BASE_DIR = _resource_base()
+
+
 class TerminalTrimManager:
     """终端日志裁剪管理器。
 
@@ -486,11 +498,11 @@ class SerialMonitor(QMainWindow):
 
         self.current_theme = theme
         stylesheet = qdarktheme.load_stylesheet(theme)
-        custom_style_file = f"utils/custom_style_{theme}.qss"
-        if Path(custom_style_file).exists():
-            custom_style = Path(custom_style_file).read_text()
+        custom_style_file = BASE_DIR / "utils" / f"custom_style_{theme}.qss"
+        if custom_style_file.exists():
+            custom_style = custom_style_file.read_text()
         else:
-            custom_style = Path("utils/custom_style_dark.qss").read_text()
+            custom_style = (BASE_DIR / "utils" / "custom_style_dark.qss").read_text()
         app.setStyleSheet(stylesheet + custom_style)
         self._rebuild_trim_menu()
 

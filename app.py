@@ -14,6 +14,18 @@ import sys
 import os
 from pathlib import Path
 
+
+def _resource_base() -> Path:
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+BASE_DIR = _resource_base()
+
 os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.*=false;kf.*=false"
 
 from PyQt6.QtWidgets import QApplication
@@ -44,10 +56,9 @@ def _restore_stderr(old_stderr: int | None) -> None:
 
 def _set_app_icon(app: QApplication) -> None:
     """设置应用程序图标。"""
-    script_dir = Path(__file__).resolve().parent
     icon_files = ["终端.png", "favicon.ico"]
 
-    for directory in (script_dir, Path.cwd()):
+    for directory in (BASE_DIR, Path.cwd()):
         for icon_file in icon_files:
             icon_path = directory / icon_file
             if icon_path.exists():
@@ -72,11 +83,11 @@ def main() -> None:
     theme = os.environ.get("THEME", "dark")
     stylesheet = qdarktheme.load_stylesheet(theme)
 
-    custom_style_file = f"utils/custom_style_{theme}.qss"
-    if Path(custom_style_file).exists():
-        custom_style = Path(custom_style_file).read_text()
+    custom_style_file = BASE_DIR / "utils" / f"custom_style_{theme}.qss"
+    if custom_style_file.exists():
+        custom_style = custom_style_file.read_text()
     else:
-        custom_style = Path("utils/custom_style_dark.qss").read_text()
+        custom_style = (BASE_DIR / "utils" / "custom_style_dark.qss").read_text()
     app.setStyleSheet(stylesheet + custom_style)
 
     app.setApplicationName("Serial Monitor")

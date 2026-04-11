@@ -10,6 +10,8 @@ a = Analysis(
     datas=[
         ('终端.png', '.'),
         ('config', 'config'),
+        ('utils/custom_style_dark.qss', 'utils'),
+        ('utils/custom_style_light.qss', 'utils'),
     ],
     hiddenimports=[
         'PyQt6',
