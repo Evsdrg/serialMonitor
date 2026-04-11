@@ -395,7 +395,7 @@ class SerialMonitor(QMainWindow):
         self.checksum_label = QLabel()
         self.checksum_input = QLineEdit()
         self.checksum_input.setReadOnly(True)
-        self.checksum_input.setFixedWidth(100)
+        self.checksum_input.setFixedWidth(160)
         self.calculate_checksum_button = QPushButton()
         self.calculate_checksum_button.clicked.connect(self.calculate_checksum)
 
@@ -483,7 +483,9 @@ class SerialMonitor(QMainWindow):
         else:
             theme = "dark"
 
-        app.setStyleSheet(qdarktheme.load_stylesheet(theme))
+        stylesheet = qdarktheme.load_stylesheet(theme)
+        custom_style = Path("utils/custom_style.qss").read_text()
+        app.setStyleSheet(stylesheet + custom_style)
 
     def update_texts(self) -> None:
         # 更新主题下拉框文本

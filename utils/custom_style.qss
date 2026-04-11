@@ -1,0 +1,25 @@
+/* 统一控件样式 - 输入框采用按钮风格 */
+
+QLineEdit {
+    background-color: transparent;
+    border: 1px solid rgba(63.000, 64.000, 66.000, 1.000);
+}
+
+QLineEdit:focus {
+    border: 1px solid rgba(138.000, 180.000, 247.000, 1.000);
+}
+
+QComboBox {
+    background-color: transparent;
+    border: 1px solid rgba(63.000, 64.000, 66.000, 1.000);
+}
+
+QSpinBox, QDoubleSpinBox {
+    background-color: transparent;
+    border: 1px solid rgba(63.000, 64.000, 66.000, 1.000);
+}
+
+QTextEdit, QPlainTextEdit {
+    background-color: transparent;
+    border: 1px solid rgba(63.000, 64.000, 66.000, 1.000);
+}

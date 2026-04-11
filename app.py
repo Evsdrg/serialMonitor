@@ -70,7 +70,10 @@ def main() -> None:
     import qdarktheme
 
     theme = os.environ.get("THEME", "dark")
-    app.setStyleSheet(qdarktheme.load_stylesheet(theme))
+    stylesheet = qdarktheme.load_stylesheet(theme)
+
+    custom_style = Path("utils/custom_style.qss").read_text()
+    app.setStyleSheet(stylesheet + custom_style)
 
     app.setApplicationName("Serial Monitor")
     app.setApplicationDisplayName("Serial Monitor")
