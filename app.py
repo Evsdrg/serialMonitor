@@ -67,6 +67,11 @@ def main() -> None:
     app = QApplication(sys.argv)
     _restore_stderr(old_stderr)
 
+    import qdarktheme
+
+    theme = os.environ.get("THEME", "dark")
+    app.setStyleSheet(qdarktheme.load_stylesheet(theme))
+
     app.setApplicationName("Serial Monitor")
     app.setApplicationDisplayName("Serial Monitor")
     _set_app_icon(app)
