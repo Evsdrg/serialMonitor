@@ -1,4 +1,4 @@
 PyQt6
 pyserial
 pyinstaller
-qdarktheme
+pyqtdarktheme
