@@ -500,9 +500,11 @@ class SerialMonitor(QMainWindow):
         stylesheet = qdarktheme.load_stylesheet(theme)
         custom_style_file = BASE_DIR / "utils" / f"custom_style_{theme}.qss"
         if custom_style_file.exists():
-            custom_style = custom_style_file.read_text()
+            custom_style = custom_style_file.read_text(encoding="utf-8")
         else:
-            custom_style = (BASE_DIR / "utils" / "custom_style_dark.qss").read_text()
+            custom_style = (BASE_DIR / "utils" / "custom_style_dark.qss").read_text(
+                encoding="utf-8"
+            )
         app.setStyleSheet(stylesheet + custom_style)
         self._rebuild_trim_menu()
 
