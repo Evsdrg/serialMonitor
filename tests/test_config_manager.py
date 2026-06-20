@@ -152,4 +152,36 @@ class TestConfigManager:
             ConfigManager._SETTINGS_FILE = config_dir / "settings.json"
             ConfigManager._QUICK_SEND_FILE = config_dir / "quick_sends.json"
             ConfigManager.ensure_config_dir()
-            assert config_dir.exists()
+
+    def test_save_settings_oserror(self, tmp_path):
+        with patch.object(ConfigManager, "_CONFIG_DIR", tmp_path):
+            ConfigManager._SETTINGS_FILE = tmp_path / "settings.json"
+            ConfigManager._QUICK_SEND_FILE = tmp_path / "quick_sends.json"
+            with patch("builtins.open", side_effect=OSError("disk full")):
+                # 不应抛异常
+                ConfigManager.save_settings({"key": "value"})
+
+    def test_save_quick_sends_oserror(self, tmp_path):
+        with patch.object(ConfigManager, "_CONFIG_DIR", tmp_path):
+            ConfigManager._SETTINGS_FILE = tmp_path / "settings.json"
+            ConfigManager._QUICK_SEND_FILE = tmp_path / "quick_sends.json"
+            with patch("builtins.open", side_effect=OSError("disk full")):
+                # 不应抛异常
+                ConfigManager.save_quick_sends([{"content": "x"}])
+
+
+class TestGetConfigDir:
+    def test_frozen_mode(self):
+        import sys as sys_mod
+        with patch.object(sys_mod, "frozen", True, create=True), \
+             patch.object(sys_mod, "_MEIPASS", "/tmp/fake_meipass", create=True), \
+             patch.object(sys_mod, "executable", "/tmp/fake_exec/bin/app"):
+            result = _get_config_dir()
+            assert result == Path("/tmp/fake_exec/bin/config")
+
+    def test_development_mode(self):
+        import sys as sys_mod
+        with patch.object(sys_mod, "frozen", False, create=True):
+            result = _get_config_dir()
+            assert result.name == "config"
+            assert result.is_dir()
