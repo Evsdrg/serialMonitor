@@ -32,10 +32,12 @@ class TestModeSwitchInvariants:
         """切换接收模式后状态应保持。"""
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
+        # 显式重置为 False，避免前序测试状态污染
+        monitor.receive_hex_mode = False
 
-        for _ in range(3):
+        for _ in range(2):
             monitor.toggle_receive_mode()
-        # 3 次切换后状态应回到 False
+        # 2 次切换后状态应回到 False（偶数次）
         assert monitor.receive_hex_mode is False
 
         monitor.toggle_receive_mode()
