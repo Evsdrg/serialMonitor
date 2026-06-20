@@ -85,3 +85,20 @@ SerialMonitorLogs*/
 .DS_Store
 Thumbs.db
 *~
+
+# Editor / agent tooling
+.opencode/
+.mutmut-cache/
+mutants/
+mutmut-stats.json
+
+# Test / coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.cache/
+.pytest_cache/
+
+# Build artifacts (PyInstaller)
+build/

@@ -1,0 +1,13 @@
+PyQt6
+pyserial
+pyinstaller
+pyqtdarktheme
+
+# 开发依赖
+pytest
+pytest-qt
+pytest-cov
+pytest-xdist
+pytest-mock
+freezegun
+hypothesis>=6.0
