@@ -7,7 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  # 快速测试：PR 反馈用，跳过 slow 标记的集成/属性测试
+  test-fast:
+    name: Fast tests (PR feedback)
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -31,15 +33,58 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -r requirements-dev.txt
           pip install pytest pytest-qt pytest-mock
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short
+      - name: Run fast tests (parallel, no slow/integration)
+        run: pytest tests/ -m "not slow" -n auto -q --tb=short --dist=loadfile
         env:
           QT_QPA_PLATFORM: offscreen
 
+  # 完整测试：nightly 或 main 分支，包含所有测试
+  test-full:
+    name: Full tests (nightly)
+    runs-on: ubuntu-latest
+    needs: test-fast
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        python-version: ['3.14']
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxcb-cursor0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install pytest pytest-qt pytest-mock
+
+      - name: Run all tests (parallel, with coverage)
+        run: pytest tests/ -n auto --dist=loadfile --cov=core --cov=utils --cov=ui --cov=app --cov-report=term-missing --cov-report=xml
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          file: coverage.xml
+          fail_ci_if_error: false
+
   build-linux:
-    needs: test
+    needs: test-fast
     runs-on: ubuntu-latest
 
     steps:
@@ -66,7 +111,7 @@ jobs:
           path: dist/SerialMonitor
 
   build-windows:
-    needs: test
+    needs: test-fast
     runs-on: windows-latest
 
     steps:
