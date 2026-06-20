@@ -195,7 +195,7 @@ class TerminalEmulator(QTextEdit):
                     if m:
                         params_str = m.group(1)
                         final_char = m.group(2)
-                        consumed = 2 + m.end()
+                        consumed = i + 2 + m.end()
                         self._handle_csi(params_str, final_char)
                         i = consumed
                         continue
@@ -388,7 +388,7 @@ class TerminalEmulator(QTextEdit):
         at_bottom = sb and sb.value() >= sb.maximum() - self._SCROLL_MARGIN
 
         cursor = QTextCursor(self.document())
-        cursor.select(QTextCursor.MoveOperation.Document)
+        cursor.select(QTextCursor.SelectionType.Document)
         cursor.beginEditBlock()
 
         cursor_fmt = QTextCharFormat()
