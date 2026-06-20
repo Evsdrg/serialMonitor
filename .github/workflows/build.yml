@@ -34,7 +34,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-          pip install pytest pytest-qt pytest-mock
 
       - name: Run fast tests (parallel, no slow/integration)
         run: pytest tests/ -m "not slow" -n auto -q --tb=short --dist=loadfile
@@ -70,7 +69,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-          pip install pytest pytest-qt pytest-mock
 
       - name: Run all tests (parallel, with coverage)
         run: pytest tests/ -n auto --dist=loadfile --cov=core --cov=utils --cov=ui --cov=app --cov-report=term-missing --cov-report=xml
