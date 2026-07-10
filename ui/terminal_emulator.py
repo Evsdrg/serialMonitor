@@ -14,6 +14,7 @@ Copyright (C) 2026 cpevor. Licensed under GPL v3.
 
 from __future__ import annotations
 
+import codecs
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -86,13 +87,16 @@ class TerminalEmulator(QTextEdit):
 
         # 部分转义序列缓冲
         self._esc_buf: str = ""
+        self._utf8_decoder = codecs.getincrementaldecoder("utf-8")(
+            errors="backslashreplace"
+        )
 
         # 渲染节流标记
         self._dirty: bool = True
         self._render_pending: bool = False
 
-        # ESC 序列终止符正则
-        self._csi_terminator = re.compile(r"^(\d*(?:;\d*)*)([A-Za-z])")
+        # ECMA-48: parameter bytes, intermediate bytes, final byte.
+        self._csi_terminator = re.compile(r"^([0-?]*)([ -/]*)([@-~])")
 
     # ── 公共 API ─────────────────────────────────────────────
 
@@ -101,11 +105,12 @@ class TerminalEmulator(QTextEdit):
         if not data:
             return
 
+        decoded = self._utf8_decoder.decode(data, final=False)
         if self._esc_buf:
-            text = self._esc_buf + data.decode("utf-8", errors="backslashreplace")
+            text = self._esc_buf + decoded
             self._esc_buf = ""
         else:
-            text = data.decode("utf-8", errors="backslashreplace")
+            text = decoded
 
         self._process_text(text)
 
@@ -194,7 +199,7 @@ class TerminalEmulator(QTextEdit):
                     m = self._csi_terminator.match(rest)
                     if m:
                         params_str = m.group(1)
-                        final_char = m.group(2)
+                        final_char = m.group(3)
                         consumed = i + 2 + m.end()
                         self._handle_csi(params_str, final_char)
                         i = consumed
@@ -281,6 +286,9 @@ class TerminalEmulator(QTextEdit):
 
     def _handle_csi(self, params_str: str, final: str) -> None:
         """处理 CSI（\033[...X）序列。"""
+        if any(ch not in "0123456789;" for ch in params_str):
+            return
+
         params = (
             [int(p) if p else 0 for p in params_str.split(";")] if params_str else [0]
         )

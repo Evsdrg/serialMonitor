@@ -42,6 +42,18 @@ class TestTerminalEmulatorBasic:
 
 
 class TestTerminalEmulatorText:
+    def test_utf8_character_split_across_chunks(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+
+        encoded = "你".encode("utf-8")
+        term.process_bytes(encoded[:1])
+        assert term.cursor_col == 0
+
+        term.process_bytes(encoded[1:])
+        assert term.grid[0][0].char == "你"
+        assert term.cursor_col == 1
+
     def test_process_plain_text(self, qtbot):
         term = TerminalEmulator(rows=5, cols=20)
         qtbot.addWidget(term)
@@ -350,10 +362,10 @@ class TestTerminalEmulatorEdgeCases:
         term = TerminalEmulator(rows=2, cols=5)
         qtbot.addWidget(term)
         # DECTCEM 光标显示/隐藏 — 忽略
-        term.process_bytes(b"\x1b[?25h")
-        term.process_bytes(b"\x1b[?25l")
-        # 不应抛异常
-        assert term.cursor_row == 0
+        term.process_bytes(b"\x1b[?25hA\x1b[?25lB")
+        assert term._esc_buf == ""
+        assert term.grid[0][0].char == "A"
+        assert term.grid[0][1].char == "B"
 
     def test_csi_unknown_ignored(self, qtbot):
         term = TerminalEmulator(rows=2, cols=5)
@@ -444,6 +456,7 @@ class TestTerminalEmulatorEdgeCases:
         # 通过不完整 CSI 测试 ESC 缓冲
         term.process_bytes(b"\x1b[")
         assert term._esc_buf == "\x1b["
-        # 不被 regex 识别的内容会保留在缓冲
-        term.process_bytes(b"?25h")
-        assert term._esc_buf == "\x1b[?25h"
+        term.process_bytes(b"?25hOK")
+        assert term._esc_buf == ""
+        assert term.grid[0][0].char == "O"
+        assert term.grid[0][1].char == "K"

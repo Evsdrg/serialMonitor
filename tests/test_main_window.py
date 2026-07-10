@@ -104,8 +104,18 @@ class TestTerminalTrimManager:
         lines = "\n".join(f"line{i}" for i in range(20))
         doc.setPlainText(lines)
         tm.trim_if_needed(doc)
-        # 应裁剪到 max_lines 附近
-        assert doc.blockCount() <= 20
+        assert doc.blockCount() == 5
+        assert doc.toPlainText() == "\n".join(f"line{i}" for i in range(15, 20))
+
+    def test_trim_preserves_first_remaining_character(self):
+        tm = TerminalTrimManager()
+        tm.max_lines = 2
+        tm.batch_lines = 1
+
+        doc = QTextDocument("line1\nline2\nline3")
+        tm.trim_if_needed(doc)
+
+        assert doc.toPlainText() == "line2\nline3"
 
     def test_trim_with_empty_document(self):
         tm = TerminalTrimManager()
@@ -154,8 +164,9 @@ class TestTerminalTrimManager:
         doc = QTextDocument()
         lines = "\n".join(f"line{i}" for i in range(20))
         doc.setPlainText(lines)
-        # 不应抛异常
+        before = doc.toPlainText()
         tm.trim_if_needed(doc)
+        assert doc.toPlainText() == before
 
 
 class TestSerialMonitorStatic:
@@ -336,10 +347,43 @@ class TestSerialMonitorDataProcessing:
     def test_on_serial_data_no_newline(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
+        monitor.show_timestamp = False
         monitor._on_serial_data(b"no_newline")
         text = monitor.terminal_display.toPlainText()
-        assert "no_newline" in text
-        assert text.endswith("\n")
+        assert text == "no_newline"
+
+    def test_on_serial_data_preserves_chunk_boundaries(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.show_timestamp = False
+
+        monitor._on_serial_data(b"abc")
+        monitor._on_serial_data(b"def\n")
+
+        assert monitor.terminal_display.toPlainText() == "abcdef\n"
+
+    def test_on_serial_data_decodes_utf8_across_chunks(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.show_timestamp = False
+        encoded = "你".encode("utf-8")
+
+        monitor._on_serial_data(encoded[:1])
+        assert monitor.terminal_display.toPlainText() == ""
+
+        monitor._on_serial_data(encoded[1:])
+        assert monitor.terminal_display.toPlainText() == "你"
+
+    def test_on_serial_data_timestamps_split_crlf_once(self, qtbot, monkeypatch):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.show_timestamp = True
+        monkeypatch.setattr(monitor, "get_timestamp", lambda: "[T] ")
+
+        monitor._on_serial_data(b"first\r")
+        monitor._on_serial_data(b"\nsecond")
+
+        assert monitor.terminal_display.toPlainText() == "[T] first\n[T] second"
 
     def test_on_serial_data_hex_mode(self, qtbot):
         monitor = SerialMonitor()

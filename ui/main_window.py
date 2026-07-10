@@ -6,6 +6,7 @@ Copyright (C) 2026 cpevor. Licensed under GPL v3.
 
 from __future__ import annotations
 
+import codecs
 import logging
 import os
 import sys
@@ -106,14 +107,16 @@ class TerminalTrimManager:
             suffix = "other"
         return base / f"SerialMonitorTrimmedLogs_{suffix}"
 
-    def _append_log(self, text: str) -> None:
+    def _append_log(self, text: str) -> bool:
         if not text:
-            return
+            return True
         try:
             with self._log_file.open("a", encoding="utf-8", errors="replace") as f:
                 f.write(text)
+            return True
         except OSError as e:
             logger.warning("Failed to write trim log: %s", e)
+            return False
 
     def trim_if_needed(self, document: QTextDocument) -> None:
         """检查并裁剪文档内容。"""
@@ -124,7 +127,8 @@ class TerminalTrimManager:
         if block_count <= self.max_lines:
             return
 
-        trim_count = min(self.batch_lines, max(0, block_count - self.max_lines))
+        excess = max(0, block_count - self.max_lines)
+        trim_count = min(block_count - 1, max(self.batch_lines, excess))
         if trim_count <= 0:
             return
 
@@ -137,7 +141,8 @@ class TerminalTrimManager:
             block = block.next()
 
         trimmed_text = "\n".join(lines) + "\n"
-        self._append_log(trimmed_text)
+        if not self._append_log(trimmed_text):
+            return
 
         cursor = QTextCursor(document)
         cursor.movePosition(QTextCursor.MoveOperation.Start)
@@ -147,7 +152,6 @@ class TerminalTrimManager:
             ):
                 break
         cursor.removeSelectedText()
-        cursor.deleteChar()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -177,6 +181,11 @@ class SerialMonitor(QMainWindow):
         self.current_port: Optional[str] = None
         self.language: str = "zh"
         self.enable_ansi_colors: bool = True
+        self._receive_decoder = codecs.getincrementaldecoder("utf-8")(
+            errors="backslashreplace"
+        )
+        self._receive_at_line_start: bool = True
+        self._receive_pending_cr: bool = False
         self.quick_send_manager = QuickSendManager(self)
         self.manual_disconnect: bool = False
         self.terminal_mode: bool = False
@@ -873,6 +882,9 @@ class SerialMonitor(QMainWindow):
             QMessageBox.warning(self, self.t("warning"), self.t("select_port"))
             return
 
+        self._receive_decoder.reset()
+        self._receive_at_line_start = True
+        self._receive_pending_cr = False
         ok = self.serial_handler.open(
             port=port,
             baudrate=self.baudrate_combo.currentText(),
@@ -959,6 +971,20 @@ class SerialMonitor(QMainWindow):
         else:
             self.terminal_display.setTextCursor(saved_cursor)
 
+    def _append_received_text(self, text: str) -> None:
+        if self._receive_pending_cr:
+            text = "\r" + text
+            self._receive_pending_cr = False
+        if text.endswith("\r"):
+            text = text[:-1]
+            self._receive_pending_cr = True
+
+        for part in text.splitlines(keepends=True):
+            self.append_to_terminal(
+                part, with_timestamp=self._receive_at_line_start
+            )
+            self._receive_at_line_start = part.endswith(("\n", "\r"))
+
     def _on_serial_data(self, data: bytes) -> None:
         if not data:
             return
@@ -970,10 +996,9 @@ class SerialMonitor(QMainWindow):
             text = format_hex(data) + "\n"
             self.append_to_terminal(text, with_timestamp=True)
         else:
-            text = data.decode("utf-8", errors="backslashreplace")
-            if not text.endswith("\n"):
-                text += "\n"
-            self.append_to_terminal(text, with_timestamp=True)
+            text = self._receive_decoder.decode(data, final=False)
+            if text:
+                self._append_received_text(text)
 
     def _on_serial_error(self, message: str) -> None:
         if self.terminal_mode:
@@ -1051,6 +1076,9 @@ class SerialMonitor(QMainWindow):
 
     def toggle_receive_mode(self) -> None:
         self.receive_hex_mode = not self.receive_hex_mode
+        self._receive_decoder.reset()
+        self._receive_at_line_start = True
+        self._receive_pending_cr = False
         self.receive_mode_button.setText(
             self.t("receive_mode_hex")
             if self.receive_hex_mode
