@@ -42,7 +42,7 @@ class TestCursorInvariants:
         qtbot.addWidget(term)
         term.process_bytes(text.encode("utf-8"))
         assert 0 <= term.cursor_row < rows
-        assert 0 <= term.cursor_col <= cols
+        assert 0 <= term.cursor_col < cols
 
     @settings(**HYP_SETTINGS)
     @given(st.text(alphabet=visible_chars, min_size=1, max_size=200))
@@ -52,7 +52,7 @@ class TestCursorInvariants:
         qtbot.addWidget(term)
         term.process_bytes(text.encode("utf-8"))
         assert 0 <= term.cursor_row < 3
-        assert 0 <= term.cursor_col <= 10
+        assert 0 <= term.cursor_col < 10
 
 
 # ── 不变式：滚动行为 ──────────────────────────────────────
@@ -158,7 +158,7 @@ class TestCSISequences:
         term = TerminalEmulator(rows=3, cols=10)
         qtbot.addWidget(term)
         term.process_bytes(f"\x1b[{n}C".encode())
-        assert term.cursor_col <= 10
+        assert term.cursor_col < 10
 
 
 # ── ANSI + 文本混合 ──────────────────────────────────────

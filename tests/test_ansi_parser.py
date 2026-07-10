@@ -3,6 +3,7 @@
 """
 
 import pytest
+from PyQt6.QtCore import Qt
 
 from core.ansi_parser import AnsiParser
 
@@ -83,9 +84,17 @@ class TestAnsiParser:
 
     def test_empty_color_code(self):
         parser = AnsiParser()
-        result = parser.parse_text("\x1b[mText")
-        assert len(result) == 1
-        assert result[0][0] == "Text"
+        result = parser.parse_text("\x1b[31mRed\x1b[mText")
+        text_segment = next(segment for segment in result if segment[0] == "Text")
+        assert text_segment[1].foreground().style() == Qt.BrushStyle.NoBrush
+
+    def test_default_foreground_and_background_codes(self):
+        parser = AnsiParser()
+        parser.parse_code("31;42m")
+        parser.parse_code("39;49m")
+
+        assert parser.current_format.foreground().style() == Qt.BrushStyle.NoBrush
+        assert parser.current_format.background().style() == Qt.BrushStyle.NoBrush
 
     def test_multiple_segments(self):
         parser = AnsiParser()
@@ -160,6 +169,17 @@ class TestAnsiParserEdgeCases:
         # fg 和 bg 应交换
         assert new_fg == bg
         assert new_bg == fg
+
+    def test_parse_code_27_disables_reverse(self):
+        parser = AnsiParser()
+        parser.parse_code("31;42m")
+        original_fg = parser.current_format.foreground()
+        original_bg = parser.current_format.background()
+        parser.parse_code("7m")
+        parser.parse_code("27m")
+
+        assert parser.current_format.foreground() == original_fg
+        assert parser.current_format.background() == original_bg
 
     def test_strip_ansi_with_text(self):
         parser = AnsiParser()

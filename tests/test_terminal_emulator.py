@@ -5,7 +5,8 @@
 import pytest
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtGui import QColor, QKeyEvent, QTextCursor
+from PyQt6.QtWidgets import QTextEdit
 
 from ui.terminal_emulator import TerminalEmulator, _Cell
 
@@ -18,6 +19,7 @@ class TestTerminalEmulatorBasic:
         assert term.cols == 40
         assert len(term.grid) == 10
         assert len(term.grid[0]) == 40
+        assert term.lineWrapMode() == QTextEdit.LineWrapMode.NoWrap
 
     def test_clear_screen(self, qtbot):
         term = TerminalEmulator(rows=5, cols=5)
@@ -100,20 +102,24 @@ class TestTerminalEmulatorText:
         term = TerminalEmulator(rows=5, cols=3)
         qtbot.addWidget(term)
 
-        term.process_bytes(b"abcd")
+        term.process_bytes(b"abc")
         assert term.grid[0][0].char == "a"
         assert term.grid[0][2].char == "c"
+        assert term.cursor_row == 0
+        assert term.cursor_col == 2
+
+        term.process_bytes(b"d")
         assert term.grid[1][0].char == "d"
 
     def test_scroll_up(self, qtbot):
         term = TerminalEmulator(rows=3, cols=10)
         qtbot.addWidget(term)
 
-        term.process_bytes(b"line1\nline2\nline3\nline4")
+        term.process_bytes(b"line1\r\nline2\r\nline3\r\nline4")
         assert term.grid[1][0].char == "l"
         assert term.grid[1][4].char == "3"
-        assert term.grid[2][5].char == "l"
-        assert term.grid[2][9].char == "4"
+        assert term.grid[2][0].char == "l"
+        assert term.grid[2][4].char == "4"
 
 
 class TestTerminalEmulatorCSI:
@@ -160,8 +166,8 @@ class TestTerminalEmulatorCSI:
         qtbot.addWidget(term)
 
         term.process_bytes(b"0123456789\x1b[5D\x1b[K")
-        assert term.grid[0][4].char == "4"
-        assert term.grid[0][5].char == " "
+        assert term.grid[0][3].char == "3"
+        assert term.grid[0][4].char == " "
         assert term.grid[0][0].char == "0"
 
     def test_csi_erase_display(self, qtbot):
@@ -170,7 +176,7 @@ class TestTerminalEmulatorCSI:
 
         term.process_bytes(b"hello\nworld\x1b[2Jx")
         assert term.grid[0][0].char == " "
-        assert term.grid[2][0].char == "x"
+        assert term.grid[1][9].char == "x"
 
     def test_csi_save_restore_cursor(self, qtbot):
         term = TerminalEmulator(rows=5, cols=10)
@@ -205,12 +211,33 @@ class TestTerminalEmulatorCSI:
         assert term._esc_buf == ""
         assert term.grid[0][0].char == "x"
 
-    def test_non_csi_escape_ignored(self, qtbot):
+    def test_dcs_control_string_ignored(self, qtbot):
         term = TerminalEmulator(rows=3, cols=10)
         qtbot.addWidget(term)
 
-        term.process_bytes(b"\x1bPignored")
-        assert term.grid[0][0].char == "i"
+        term.process_bytes(b"\x1bPignored\x1b\\OK")
+        assert term.grid[0][0].char == "O"
+        assert term.grid[0][1].char == "K"
+
+    def test_osc_control_string_ignored(self, qtbot):
+        term = TerminalEmulator(rows=3, cols=20)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"before\x1b]0;device-title\x07after")
+        text = "".join(cell.char for cell in term.grid[0]).rstrip()
+        assert text == "beforeafter"
+
+    def test_osc_control_string_buffered_across_chunks(self, qtbot):
+        term = TerminalEmulator(rows=3, cols=20)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b]0;device")
+        assert term._esc_buf == "\x1b]0;device"
+
+        term.process_bytes(b"-title\x1b\\OK")
+        assert term._esc_buf == ""
+        assert term.grid[0][0].char == "O"
+        assert term.grid[0][1].char == "K"
 
 
 class TestTerminalEmulatorKeyboard:
@@ -264,6 +291,52 @@ class TestTerminalEmulatorKeyboard:
         qtbot.keyClick(term, "c", modifier=Qt.KeyboardModifier.ControlModifier)
         assert received == [b"\x03"]
 
+    def test_ctrl_shift_c_copies_without_sending_etx(self, qtbot, qapp):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+        term.process_bytes(b"hello")
+        term._render_full()
+        cursor = term.textCursor()
+        cursor.setPosition(0)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.Right,
+            QTextCursor.MoveMode.KeepAnchor,
+            5,
+        )
+        term.setTextCursor(cursor)
+        received = []
+        term.key_pressed.connect(received.append)
+
+        qtbot.keyClick(
+            term,
+            Qt.Key.Key_C,
+            modifier=(
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.ShiftModifier
+            ),
+        )
+
+        assert received == []
+        assert qapp.clipboard().text() == "hello"
+
+    def test_ctrl_shift_v_sends_clipboard_as_utf8(self, qtbot, qapp):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+        qapp.clipboard().setText("你好\n")
+        received = []
+        term.key_pressed.connect(received.append)
+
+        qtbot.keyClick(
+            term,
+            Qt.Key.Key_V,
+            modifier=(
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.ShiftModifier
+            ),
+        )
+
+        assert received == ["你好\n".encode("utf-8")]
+
 
 class TestTerminalEmulatorSearch:
     def test_search_highlight(self, qtbot):
@@ -271,8 +344,14 @@ class TestTerminalEmulatorSearch:
         qtbot.addWidget(term)
 
         term.process_bytes(b"hello world")
-        term.search_highlight = (0, 6)
-        assert term.search_highlight == (0, 6)
+        term.search_highlight = (0, 6, 5)
+        term._render_full()
+
+        assert term.search_highlight == (0, 6, 5)
+        cursor = QTextCursor(term.document())
+        cursor.setPosition(6)
+        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.KeepAnchor, 5)
+        assert cursor.charFormat().background().color() == QColor(255, 200, 0)
 
 
 class TestTerminalEmulatorEdgeCases:
@@ -444,7 +523,7 @@ class TestTerminalEmulatorEdgeCases:
     def test_newline_scrolls_when_at_bottom(self, qtbot):
         term = TerminalEmulator(rows=2, cols=5)
         qtbot.addWidget(term)
-        term.process_bytes(b"line1\nline2\nline3\n")
+        term.process_bytes(b"line1\r\nline2\r\nline3\r\n")
         # 滚屏后 line3 应在可见区域内
         all_text = "".join(c.char for row in term.grid for c in row)
         assert "line3" in all_text

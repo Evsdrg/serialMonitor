@@ -71,10 +71,14 @@ class AnsiParser:
     def reset_format(self) -> None:
         """重置文本格式为默认"""
         self.current_format = QTextCharFormat()
+        self._reverse_video = False
 
     def parse_code(self, code: str) -> None:
         """解析 ANSI 转义码并更新当前格式"""
-        if not code or code == "m":
+        if not code:
+            return
+        if code == "m":
+            self.reset_format()
             return
 
         code = code.rstrip("m")
@@ -94,10 +98,23 @@ class AnsiParser:
             elif c == "4":
                 self.current_format.setFontUnderline(True)
             elif c == "7":
-                fg = self.current_format.foreground().color()
-                bg = self.current_format.background().color()
-                self.current_format.setForeground(bg)
-                self.current_format.setBackground(fg)
+                if not self._reverse_video:
+                    fg = self.current_format.foreground()
+                    bg = self.current_format.background()
+                    self.current_format.setForeground(bg)
+                    self.current_format.setBackground(fg)
+                    self._reverse_video = True
+            elif c == "27":
+                if self._reverse_video:
+                    fg = self.current_format.foreground()
+                    bg = self.current_format.background()
+                    self.current_format.setForeground(bg)
+                    self.current_format.setBackground(fg)
+                    self._reverse_video = False
+            elif c == "39":
+                self.current_format.clearForeground()
+            elif c == "49":
+                self.current_format.clearBackground()
             elif c == "22":
                 self.current_format.setFontWeight(QFont.Weight.Normal)
             elif c == "24":

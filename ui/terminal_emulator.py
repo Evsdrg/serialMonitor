@@ -27,7 +27,7 @@ from PyQt6.QtGui import (
     QColor,
     QFont,
 )
-from PyQt6.QtWidgets import QTextEdit
+from PyQt6.QtWidgets import QApplication, QTextEdit
 
 from core.ansi_parser import AnsiParser
 from core.ansi import strip_ansi
@@ -64,11 +64,12 @@ class TerminalEmulator(QTextEdit):
         self.cols = cols
         self.enable_ansi_colors: bool = True
         self.font_family: str = "Consolas"
-        self.search_highlight: tuple[int, int] | None = None
+        self.search_highlight: tuple[int, int, int] | None = None
 
         self.setReadOnly(True)
         self.setTabChangesFocus(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self._apply_font()
 
         # 网格：grid[row][col]
@@ -77,6 +78,7 @@ class TerminalEmulator(QTextEdit):
         ]
         self.cursor_row: int = 0
         self.cursor_col: int = 0
+        self._wrap_pending: bool = False
 
         # 光标保存/恢复
         self._saved_row: int = 0
@@ -122,6 +124,7 @@ class TerminalEmulator(QTextEdit):
         self.grid = [[_Cell() for _ in range(self.cols)] for _ in range(self.rows)]
         self.cursor_row = 0
         self.cursor_col = 0
+        self._wrap_pending = False
         self._dirty = True
         self._render_full()
 
@@ -136,6 +139,19 @@ class TerminalEmulator(QTextEdit):
     def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
         mod = event.modifiers()
+
+        if (
+            mod & Qt.KeyboardModifier.ControlModifier
+            and mod & Qt.KeyboardModifier.ShiftModifier
+        ):
+            if key == Qt.Key.Key_C:
+                self.copy()
+                return
+            if key == Qt.Key.Key_V:
+                text = QApplication.clipboard().text()
+                if text:
+                    self.key_pressed.emit(text.encode("utf-8"))
+                return
 
         # Ctrl+字母 → 控制字符
         if (
@@ -208,6 +224,14 @@ class TerminalEmulator(QTextEdit):
                         # CSI 不完整，缓冲等待更多数据
                         self._esc_buf = text[i:]
                         return
+                elif i + 1 < length and text[i + 1] in "]PX^_":
+                    allow_bel = text[i + 1] == "]"
+                    end = self._find_control_string_end(text, i + 2, allow_bel)
+                    if end is None:
+                        self._esc_buf = text[i:]
+                        return
+                    i = end
+                    continue
                 elif i + 1 < length:
                     # 非 CSI 的 ESC 序列，跳过两个字符
                     i += 2
@@ -220,11 +244,13 @@ class TerminalEmulator(QTextEdit):
             # ── 回车 ──
             elif ch == "\r":
                 self.cursor_col = 0
+                self._wrap_pending = False
                 i += 1
                 self._dirty = True
 
             # ── 换行 ──
             elif ch == "\n":
+                self._wrap_pending = False
                 self._newline()
                 i += 1
                 self._dirty = True
@@ -243,6 +269,7 @@ class TerminalEmulator(QTextEdit):
 
             # ── 退格 ──
             elif ch == "\x08":
+                self._wrap_pending = False
                 if self.cursor_col > 0:
                     self.cursor_col -= 1
                 i += 1
@@ -258,16 +285,37 @@ class TerminalEmulator(QTextEdit):
             else:
                 i += 1
 
+    @staticmethod
+    def _find_control_string_end(
+        text: str, start: int, allow_bel: bool
+    ) -> int | None:
+        endings: list[tuple[int, int]] = []
+        st_index = text.find("\x1b\\", start)
+        if st_index >= 0:
+            endings.append((st_index, 2))
+        if allow_bel:
+            bel_index = text.find("\x07", start)
+            if bel_index >= 0:
+                endings.append((bel_index, 1))
+        if not endings:
+            return None
+        index, size = min(endings)
+        return index + size
+
     def _put_char(self, ch: str) -> None:
         """在光标位置写入字符并前进光标。"""
-        if self.cursor_col >= self.cols:
+        if self._wrap_pending:
             self.cursor_col = 0
             self._newline()
+            self._wrap_pending = False
 
         cell = self.grid[self.cursor_row][self.cursor_col]
         cell.char = ch
         cell.fmt = QTextCharFormat(self._ansi_parser.current_format)
-        self.cursor_col += 1
+        if self.cursor_col == self.cols - 1:
+            self._wrap_pending = True
+        else:
+            self.cursor_col += 1
 
     def _newline(self) -> None:
         """光标下移一行，必要时滚屏。"""
@@ -316,6 +364,7 @@ class TerminalEmulator(QTextEdit):
             col = max(params[1] if len(params) > 1 else 1, 1) - 1
             self.cursor_row = min(row, self.rows - 1)
             self.cursor_col = min(col, self.cols - 1)
+            self._wrap_pending = False
             self._dirty = True
         elif final == "s":
             self._saved_row = self.cursor_row
@@ -323,6 +372,7 @@ class TerminalEmulator(QTextEdit):
         elif final == "u":
             self.cursor_row = self._saved_row
             self.cursor_col = self._saved_col
+            self._wrap_pending = False
             self._dirty = True
         elif final in ("l", "h"):
             # DECTCEM 光标显示/隐藏 — 忽略
@@ -333,11 +383,13 @@ class TerminalEmulator(QTextEdit):
     def _move_cursor(self, dx: int, dy: int) -> None:
         self.cursor_row = max(0, min(self.rows - 1, self.cursor_row + dy))
         self.cursor_col = max(0, min(self.cols - 1, self.cursor_col + dx))
+        self._wrap_pending = False
         self._dirty = True
 
     # ── 内部：擦除操作 ───────────────────────────────────────
 
     def _erase_display(self, mode: int) -> None:
+        self._wrap_pending = False
         if mode == 0:
             # 从光标到屏幕末尾
             for c in range(self.cursor_col, self.cols):
@@ -355,6 +407,7 @@ class TerminalEmulator(QTextEdit):
         self._dirty = True
 
     def _erase_line(self, mode: int) -> None:
+        self._wrap_pending = False
         if mode == 0:
             # 从光标到行尾
             for c in range(self.cursor_col, self.cols):
@@ -412,14 +465,16 @@ class TerminalEmulator(QTextEdit):
                 cursor.insertText("\n")
 
             for col_idx, cell in enumerate(row):
-                if row_idx == self.cursor_row and col_idx == self.cursor_col:
-                    cursor.insertText(cell.char, cursor_fmt)
-                elif (
+                if (
                     self.search_highlight is not None
                     and row_idx == self.search_highlight[0]
-                    and col_idx == self.search_highlight[1]
+                    and self.search_highlight[1]
+                    <= col_idx
+                    < self.search_highlight[1] + self.search_highlight[2]
                 ):
                     cursor.insertText(cell.char, search_fmt)
+                elif row_idx == self.cursor_row and col_idx == self.cursor_col:
+                    cursor.insertText(cell.char, cursor_fmt)
                 else:
                     cursor.insertText(cell.char, QTextCharFormat(cell.fmt))
 

@@ -804,9 +804,31 @@ class TestSerialMonitorSearch:
         qtbot.addWidget(monitor)
         monitor.terminal_mode = True
         monitor.terminal_emulator.process_bytes(b"hello world hello")
+        cursor_before = (
+            monitor.terminal_emulator.cursor_row,
+            monitor.terminal_emulator.cursor_col,
+        )
         monitor._do_search("hello", True, False)
-        assert monitor.terminal_emulator.search_highlight is not None
-        assert monitor.terminal_emulator.search_highlight[0] == 0
+        assert monitor.terminal_emulator.search_highlight == (0, 0, 5)
+        assert (
+            monitor.terminal_emulator.cursor_row,
+            monitor.terminal_emulator.cursor_col,
+        ) == cursor_before
+
+        monitor.terminal_emulator.process_bytes(b"!")
+        assert monitor.terminal_emulator.grid[0][17].char == "!"
+
+    def test_search_terminal_cycles_using_previous_match(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.terminal_mode = True
+        monitor.terminal_emulator.process_bytes(b"hello world hello")
+
+        monitor._do_search("hello", True, False)
+        assert monitor.terminal_emulator.search_highlight == (0, 0, 5)
+
+        monitor._do_search("hello", True, False)
+        assert monitor.terminal_emulator.search_highlight == (0, 12, 5)
 
     def test_search_terminal_not_found(self, qtbot):
         monitor = SerialMonitor()

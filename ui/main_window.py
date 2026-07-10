@@ -788,32 +788,28 @@ class SerialMonitor(QMainWindow):
             self.terminal_emulator._schedule_render()
             return
 
-        cur_row = self.terminal_emulator.cursor_row
-        cur_col = self.terminal_emulator.cursor_col
+        current = self.terminal_emulator.search_highlight
+        current_pos = current[:2] if current is not None else None
 
         if forward:
-            target = None
-            for r, c in matches:
-                if (r, c) > (cur_row, cur_col):
-                    target = (r, c)
-                    break
-            if target is None:
-                target = matches[0]
+            target = matches[0]
+            if current_pos is not None:
+                for match in matches:
+                    if match > current_pos:
+                        target = match
+                        break
         else:
-            target = None
-            for r, c in reversed(matches):
-                if (r, c) < (cur_row, cur_col):
-                    target = (r, c)
-                    break
-            if target is None:
-                target = matches[-1]
+            target = matches[-1]
+            if current_pos is not None:
+                for match in reversed(matches):
+                    if match < current_pos:
+                        target = match
+                        break
 
         match_idx = matches.index(target) + 1
         self.search_bar.update_result(match_idx, len(matches))
 
-        self.terminal_emulator.search_highlight = target
-        self.terminal_emulator.cursor_row = target[0]
-        self.terminal_emulator.cursor_col = target[1]
+        self.terminal_emulator.search_highlight = (target[0], target[1], len(text))
         self.terminal_emulator._dirty = True
         self.terminal_emulator._schedule_render()
 
