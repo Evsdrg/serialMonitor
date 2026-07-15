@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from PyQt6.QtNetwork import QAbstractSocket
 
 from core.socket_handler import SocketHandler
+from core.transport import TransportState
 
 
 class TestSocketHandler:
@@ -88,6 +89,7 @@ class TestSocketHandler:
         handler.current_host = "127.0.0.1"
         handler.current_port = 9000
         handler._session_active = True
+        handler._state = TransportState.CONNECTED
 
         with qtbot.waitSignal(handler.error_occurred, timeout=1000):
             assert handler.write_data(b"hello") is False

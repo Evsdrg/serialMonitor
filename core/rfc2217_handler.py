@@ -12,9 +12,22 @@ from typing import Any, Optional
 
 import serial
 import serial.rfc2217
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
+
+from core.transport import (
+    DisconnectReason,
+    TransportHandler,
+    TransportOperation,
+    TransportState,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class _WorkerCommandError(Exception):
+    def __init__(self, context: str, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.context = context
 
 
 class _Rfc2217Worker(QThread):
@@ -139,6 +152,9 @@ class _Rfc2217Worker(QThread):
                 data = remote.read(remote.in_waiting or 1)
                 if data:
                     self.data_received.emit(self, data)
+        except _WorkerCommandError as e:
+            if not self._stop_event.is_set() and not self._close_requested.is_set():
+                self.error_occurred.emit(self, str(e), e.context)
         except (OSError, ValueError, serial.SerialException) as e:
             if not self._stop_event.is_set() and not self._close_requested.is_set():
                 context = "io" if connected else "connect"
@@ -165,51 +181,39 @@ class _Rfc2217Worker(QThread):
             except queue.Empty:
                 return
 
-            if command == "write":
-                remote.write(value)
-            elif command == "dtr":
-                remote.dtr = bool(value)
-            elif command == "rts":
-                remote.rts = bool(value)
+            try:
+                if command == "write":
+                    remote.write(value)
+                elif command == "dtr":
+                    remote.dtr = bool(value)
+                elif command == "rts":
+                    remote.rts = bool(value)
+            except Exception as e:
+                context = "write" if command == "write" else "control"
+                raise _WorkerCommandError(context, e) from e
 
 
-class Rfc2217Handler(QObject):
+class Rfc2217Handler(TransportHandler):
     """对 UI 提供非阻塞 RFC2217 client 接口。"""
 
-    data_received = pyqtSignal(bytes)
-    connection_changed = pyqtSignal(bool, str)
-    error_occurred = pyqtSignal(str)
-    state_changed = pyqtSignal(str)
-
-    DISCONNECTED = "disconnected"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    CLOSING = "closing"
+    DISCONNECTED = TransportState.DISCONNECTED
+    CONNECTING = TransportState.CONNECTING
+    CONNECTED = TransportState.CONNECTED
+    CLOSING = TransportState.CLOSING
 
     def __init__(self) -> None:
         super().__init__()
         self.current_host: Optional[str] = None
         self.current_port: Optional[int] = None
-        self.last_error: Optional[str] = None
-        self.last_error_context: Optional[str] = None
-        self._state = self.DISCONNECTED
         self._worker: Optional[_Rfc2217Worker] = None
+        self._disconnect_reason: Optional[DisconnectReason] = None
+        self._ever_connected = False
 
     @property
     def endpoint(self) -> str:
         if self.current_host is None or self.current_port is None:
             return ""
         return f"{self.current_host}:{self.current_port}"
-
-    @property
-    def state(self) -> str:
-        return self._state
-
-    def is_open(self) -> bool:
-        return self._state == self.CONNECTED
-
-    def is_connecting(self) -> bool:
-        return self._state in (self.CONNECTING, self.CLOSING)
 
     @staticmethod
     def build_url(
@@ -248,7 +252,7 @@ class Rfc2217Handler(QObject):
         ignore_set_control: bool = False,
         poll_modem: bool = False,
     ) -> bool:
-        if self._state != self.DISCONNECTED:
+        if self._state is not TransportState.DISCONNECTED:
             return True
 
         try:
@@ -285,15 +289,15 @@ class Rfc2217Handler(QObject):
                 poll_modem=poll_modem,
             )
         except (UnicodeError, ValueError) as e:
-            self.last_error = str(e)
-            self.last_error_context = "connect"
-            self.error_occurred.emit(str(e))
+            self._emit_error(TransportOperation.CONNECT, str(e))
             return False
 
         self.current_host = host
         self.current_port = socket_port
         self.last_error = None
         self.last_error_context = None
+        self._disconnect_reason = None
+        self._ever_connected = False
         worker = _Rfc2217Worker(
             url=url,
             endpoint=self.endpoint,
@@ -309,22 +313,25 @@ class Rfc2217Handler(QObject):
         worker.error_occurred.connect(self._on_worker_error)
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
-        self._set_state(self.CONNECTING)
+        self._transition(TransportState.CONNECTING)
         worker.start()
         return True
 
-    def close(self) -> None:
+    def close(
+        self, reason: DisconnectReason = DisconnectReason.USER
+    ) -> None:
         worker = self._worker
         if worker is None:
             return
-        self._set_state(self.CLOSING)
+        self._disconnect_reason = reason
+        self._transition(TransportState.CLOSING)
         worker.request_stop()
 
     def shutdown(self, timeout_ms: int = 10000) -> bool:
         worker = self._worker
         if worker is None:
             return True
-        self.close()
+        self.close(reason=DisconnectReason.SHUTDOWN)
         grace_ms = max(0, timeout_ms - min(timeout_ms, 2000))
         finished = worker.wait(grace_ms)
         if not finished:
@@ -349,27 +356,28 @@ class Rfc2217Handler(QObject):
             return False
         if worker.enqueue(command, value):
             return True
-        self.last_error = "RFC2217 command queue is full"
-        self.last_error_context = "io"
-        self.error_occurred.emit(self.last_error)
+        operation = (
+            TransportOperation.WRITE
+            if command == "write"
+            else TransportOperation.CONTROL
+        )
+        self._emit_error(
+            operation,
+            "RFC2217 command queue is full",
+            reason=DisconnectReason.IO_ERROR,
+        )
         return False
 
-    def _set_state(self, state: str) -> None:
-        if self._state == state:
-            return
-        self._state = state
-        self.state_changed.emit(state)
-
     def _on_worker_connected(self, worker: object, endpoint: str) -> None:
-        if worker is not self._worker or self._state == self.CLOSING:
+        if worker is not self._worker or self._state is TransportState.CLOSING:
             return
         self.last_error = None
         self.last_error_context = None
-        self._set_state(self.CONNECTED)
-        self.connection_changed.emit(True, endpoint)
+        self._ever_connected = True
+        self._transition(TransportState.CONNECTED)
 
     def _on_worker_data(self, worker: object, data: bytes) -> None:
-        if worker is self._worker and self._state == self.CONNECTED:
+        if worker is self._worker and self._state is TransportState.CONNECTED:
             self.data_received.emit(data)
 
     def _on_worker_error(
@@ -377,9 +385,24 @@ class Rfc2217Handler(QObject):
     ) -> None:
         if worker is not self._worker:
             return
-        self.last_error = message
-        self.last_error_context = context
-        self.error_occurred.emit(message)
+        if context == "connect":
+            operation = TransportOperation.CONNECT
+            self._disconnect_reason = DisconnectReason.CONNECT_FAILED
+        elif context == "write":
+            operation = TransportOperation.WRITE
+            self._disconnect_reason = DisconnectReason.IO_ERROR
+        elif context == "control":
+            operation = TransportOperation.CONTROL
+            self._disconnect_reason = DisconnectReason.IO_ERROR
+        else:
+            operation = TransportOperation.READ
+            self._disconnect_reason = DisconnectReason.IO_ERROR
+        self._emit_error(
+            operation,
+            message,
+            reason=self._disconnect_reason,
+            legacy_context=context,
+        )
 
     def _on_worker_finished(self) -> None:
         worker = self.sender()
@@ -389,9 +412,15 @@ class Rfc2217Handler(QObject):
     def _complete_worker(self, worker: _Rfc2217Worker) -> None:
         if worker is not self._worker:
             return
-        endpoint = self.endpoint
-        was_active = self._state != self.DISCONNECTED
+        was_active = self._state is not TransportState.DISCONNECTED
+        reason = self._disconnect_reason
+        if reason is None:
+            reason = (
+                DisconnectReason.REMOTE
+                if self._ever_connected
+                else DisconnectReason.CONNECT_FAILED
+            )
         self._worker = None
-        self._set_state(self.DISCONNECTED)
+        self._transition(TransportState.DISCONNECTED, reason)
         if was_active:
-            self.connection_changed.emit(False, endpoint)
+            self._ever_connected = False

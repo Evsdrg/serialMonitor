@@ -88,6 +88,7 @@ Thumbs.db
 
 # Editor / agent tooling
 .opencode/
+.cortexkit/
 .mutmut-cache/
 mutants/
 mutmut-stats.json

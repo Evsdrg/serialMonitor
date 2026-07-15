@@ -169,6 +169,29 @@ class TestConfigManager:
                 # 不应抛异常
                 ConfigManager.save_quick_sends([{"content": "x"}])
 
+    def test_failed_atomic_save_preserves_previous_settings(self, tmp_path):
+        ConfigManager._CONFIG_DIR = tmp_path
+        ConfigManager._SETTINGS_FILE = tmp_path / "settings.json"
+        ConfigManager._QUICK_SEND_FILE = tmp_path / "quick_sends.json"
+        ConfigManager.save_settings({"value": "original"})
+
+        with patch("utils.config_manager.json.dump", side_effect=OSError("disk full")):
+            ConfigManager.save_settings({"value": "replacement"})
+
+        assert ConfigManager.load_settings() == {"value": "original"}
+
+    def test_typed_settings_use_raw_storage_boundary(self, tmp_path):
+        from utils.settings import AppSettings, TcpSettings
+
+        ConfigManager._CONFIG_DIR = tmp_path
+        ConfigManager._SETTINGS_FILE = tmp_path / "settings.json"
+        ConfigManager._QUICK_SEND_FILE = tmp_path / "quick_sends.json"
+        expected = AppSettings(tcp=TcpSettings("example.test", 9000))
+
+        ConfigManager.save_app_settings(expected)
+
+        assert ConfigManager.load_app_settings() == expected
+
 
 class TestGetConfigDir:
     def test_frozen_mode(self):

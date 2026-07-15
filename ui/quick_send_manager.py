@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QMessageBox
 
 from ui.quick_send_panel import QuickSendPanel
 from utils.config_manager import ConfigManager
-from core.protocol import parse_payload, apply_checksum
+from core.payload_sender import PayloadRequest, SendStatus
 
 
 class QuickSendManager:
@@ -73,46 +73,42 @@ class QuickSendManager:
         line_ending: str = "",
     ) -> None:
         """处理快捷发送请求"""
-        if not self.main_window.is_connected():
+        result = self.main_window.send_payload(
+            PayloadRequest(
+                text=content,
+                is_hex=is_hex,
+                line_ending=line_ending.encode("utf-8"),
+                auto_checksum=auto_checksum,
+                checksum_start=checksum_start,
+                checksum_end_mode=checksum_end_mode,
+            ),
+            display_text=content,
+            display_as_hex=is_hex,
+            sent_key="quick_send_hex" if is_hex else "quick_send_ascii",
+            queued_key=(
+                "quick_send_queued_hex" if is_hex else "quick_send_queued_ascii"
+            ),
+            show_errors=False,
+        )
+        if result.accepted:
+            return
+        if result.status is SendStatus.NOT_CONNECTED:
             QMessageBox.warning(
                 self.main_window,
                 self.main_window.t("warning"),
                 self.main_window.t("not_connected"),
             )
             return
-
-        try:
-            byte_values = parse_payload(content, is_hex=is_hex)
-
-            if line_ending:
-                byte_values += line_ending.encode("utf-8")
-
-            content_display = content
-            if auto_checksum:
-                res = apply_checksum(
-                    byte_values,
-                    checksum_start_1based=checksum_start,
-                    checksum_end_mode=checksum_end_mode,
-                )
-                byte_values = res.payload
-                if res.valid_range and res.checksum is not None:
-                    content_display += self.main_window.t("ck_tag").format(res.checksum)
-                else:
-                    content_display += self.main_window.t("ck_invalid_range")
-
-            if not self.main_window.write_data(byte_values):
-                raise RuntimeError(self.main_window.connection_error() or "write failed")
-
-            msg_key = "quick_send_hex" if is_hex else "quick_send_ascii"
-            self.main_window.append_to_terminal(
-                self.main_window.t(msg_key).format(content_display) + "\n",
-                with_timestamp=True,
-            )
-        except Exception as e:
-            self.main_window.append_to_terminal(
-                self.main_window.t("send_error").format(str(e)) + "\n",
-                with_timestamp=True,
-            )
+        if result.status is SendStatus.INVALID_PAYLOAD:
+            error = self.main_window.t("hex_even_chars")
+        elif result.status is SendStatus.INVALID_CHECKSUM_RANGE:
+            error = self.main_window.t("ck_invalid_range")
+        else:
+            error = self.main_window.connection_error() or "write failed"
+        self.main_window.append_to_terminal(
+            self.main_window.t("send_error").format(error) + "\n",
+            with_timestamp=True,
+        )
 
     def update_language(self, language: str) -> None:
         """更新语言"""

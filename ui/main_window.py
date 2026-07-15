@@ -11,7 +11,6 @@ import logging
 import os
 import sys
 import tempfile
-import time
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Optional
@@ -26,11 +25,9 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QLineEdit,
     QLabel,
-    QGroupBox,
     QMessageBox,
     QCheckBox,
     QSpinBox,
-    QDoubleSpinBox,
     QToolButton,
     QMenu,
     QApplication,
@@ -47,19 +44,40 @@ from PyQt6.QtGui import (
     QColor,
     QPalette,
     QAction,
-    QIntValidator,
 )
 
 from core.ansi_parser import AnsiParser
+from core.connection_controller import (
+    ConnectionController,
+    ConnectionMode,
+    Rfc2217ConnectionConfig,
+    SerialConnectionConfig,
+    TcpConnectionConfig,
+)
 from core.protocol import apply_checksum, format_hex, parse_payload
+from core.payload_sender import PayloadRequest, PayloadSender, SendResult, SendStatus
 from core.rfc2217_handler import Rfc2217Handler
 from core.serial_handler import SerialHandler
 from core.socket_handler import SocketHandler
+from core.transport import (
+    DisconnectReason,
+    TransportError,
+    TransportOperation,
+    TransportState,
+    TransportTransition,
+)
 from ui.quick_send_manager import QuickSendManager
+from ui.connection_panel import ConnectionPanel
 from ui.dialogs import HelpDialog
 from ui.terminal_emulator import TerminalEmulator
 from ui.search_bar import SearchBar
 from utils.i18n import I18N
+from utils.settings import (
+    AppSettings,
+    Rfc2217Settings,
+    SerialSettings,
+    TcpSettings,
+)
 from utils.theme import Theme, is_system_dark_mode
 from utils.config_manager import ConfigManager
 import qdarktheme
@@ -180,7 +198,11 @@ class SerialMonitor(QMainWindow):
         self.serial_handler = SerialHandler()
         self.socket_handler = SocketHandler()
         self.rfc2217_handler = Rfc2217Handler()
-        self.connection_mode: str = "serial"
+        self.connection_controller = ConnectionController(
+            self.serial_handler,
+            self.socket_handler,
+            self.rfc2217_handler,
+        )
         self.receive_hex_mode: bool = False
         self.send_hex_mode: bool = False
         self.auto_scroll: bool = True
@@ -191,6 +213,9 @@ class SerialMonitor(QMainWindow):
         self.current_socket_port: Optional[int] = None
         self.current_rfc2217_host: Optional[str] = None
         self.current_rfc2217_port: Optional[int] = None
+        self._serial_settings = SerialSettings()
+        self._tcp_settings = TcpSettings()
+        self._rfc2217_settings = Rfc2217Settings()
         self.language: str = "zh"
         self.enable_ansi_colors: bool = True
         self._receive_decoder = codecs.getincrementaldecoder("utf-8")(
@@ -199,44 +224,23 @@ class SerialMonitor(QMainWindow):
         self._receive_at_line_start: bool = True
         self._receive_pending_cr: bool = False
         self.quick_send_manager = QuickSendManager(self)
-        self._manual_disconnect = {
-            "serial": False,
-            "tcp": False,
-            "rfc2217": False,
-        }
         self.terminal_mode: bool = False
-        self._next_socket_reconnect_at: float = 0.0
-        self._socket_was_connected: bool = False
-        self._socket_show_error: bool = True
-        self._socket_close_silent: bool = False
-        self._next_rfc2217_reconnect_at: float = 0.0
-        self._rfc2217_was_connected: bool = False
-        self._rfc2217_show_error: bool = True
-        self._rfc2217_close_silent: bool = False
+        self._silent_disconnect_modes: set[str] = set()
         self.current_theme: str = "dark" if is_system_dark_mode() else "light"
 
         self.ansi_parser = AnsiParser()
         self.trim_manager = TerminalTrimManager()
 
-        # 传输信号绑定
-        self.serial_handler.data_received.connect(self._on_serial_transport_data)
-        self.serial_handler.error_occurred.connect(self._on_serial_transport_error)
-        self.serial_handler.connection_changed.connect(
-            self._on_serial_connection_changed
+        self.connection_controller.data_received.connect(self._on_serial_data)
+        self.connection_controller.state_changed.connect(
+            self._on_connection_state_changed
         )
-        self.socket_handler.data_received.connect(self._on_socket_transport_data)
-        self.socket_handler.error_occurred.connect(self._on_socket_transport_error)
-        self.socket_handler.connection_changed.connect(
-            self._on_socket_connection_changed
+        self.connection_controller.error_occurred.connect(
+            self._on_connection_error
         )
-        self.rfc2217_handler.data_received.connect(
-            self._on_rfc2217_transport_data
-        )
-        self.rfc2217_handler.error_occurred.connect(
-            self._on_rfc2217_transport_error
-        )
-        self.rfc2217_handler.connection_changed.connect(
-            self._on_rfc2217_connection_changed
+        self.connection_controller.reconnecting.connect(self._on_reconnecting)
+        self.payload_sender = PayloadSender(
+            self.connection_controller.write_payload, self.is_connected
         )
 
         self.init_ui()
@@ -294,128 +298,39 @@ class SerialMonitor(QMainWindow):
         toolbar_layout.addWidget(self.help_button)
         toolbar_layout.addWidget(self.quick_send_button)
 
-        # ── 端口配置组 ──
-        self.port_group = QGroupBox()
-        port_layout = QVBoxLayout()
-
-        self.port_label = QLabel()
-        self.port_combo = QComboBox()
-        self.refresh_button = QPushButton()
-        self.refresh_button.clicked.connect(self.refresh_ports)
-
-        self.connection_mode_button = QPushButton()
-        self.connection_mode_button.clicked.connect(self.toggle_connection_mode)
-
-        self.socket_host_label = QLabel()
-        self.socket_host_input = QLineEdit()
-        self.socket_host_input.setPlaceholderText("192.168.1.100")
-        self.socket_host_input.setFixedWidth(180)
-        self.socket_port_label = QLabel()
-        self.socket_port_input = QLineEdit()
-        self.socket_port_input.setValidator(QIntValidator(1, 65535, self))
-        self.socket_port_input.setPlaceholderText("9000")
-        self.socket_port_input.setFixedWidth(80)
-
-        self.rfc2217_timeout_label = QLabel()
-        self.rfc2217_timeout_spinbox = QDoubleSpinBox()
-        self.rfc2217_timeout_spinbox.setRange(0.1, 30.0)
-        self.rfc2217_timeout_spinbox.setSingleStep(0.5)
-        self.rfc2217_timeout_spinbox.setDecimals(1)
-        self.rfc2217_timeout_spinbox.setValue(3.0)
-        self.rfc2217_timeout_spinbox.setSuffix(" s")
-        self.rfc2217_ignore_control_checkbox = QCheckBox()
-
-        self.baudrate_label = QLabel()
-        self.baudrate_combo = QComboBox()
-        self.baudrate_combo.addItems(
-            ["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"]
-        )
-        self.baudrate_combo.setCurrentText("115200")
-
-        self.parity_label = QLabel()
-        self.parity_combo = QComboBox()
-        self.parity_combo.addItems(["None", "Even", "Odd"])
-
-        self.databits_label = QLabel()
-        self.databits_combo = QComboBox()
-        self.databits_combo.addItems(["5", "6", "7", "8"])
-        self.databits_combo.setCurrentText("8")
-
-        self.stopbits_label = QLabel()
-        self.stopbits_combo = QComboBox()
-        self.stopbits_combo.addItems(["1", "1.5", "2"])
-
-        self.dtr_checkbox = QCheckBox("DTR")
-        self.dtr_checkbox.stateChanged.connect(self.toggle_dtr)
-        self.rts_checkbox = QCheckBox("RTS")
-        self.rts_checkbox.stateChanged.connect(self.toggle_rts)
-
-        self.connect_button = QPushButton()
-        self.connect_button.clicked.connect(self.toggle_connection)
-
-        row1 = QHBoxLayout()
-        row1.addStretch()
-        row1.addWidget(self.connection_mode_button)
-        row1.addWidget(self.port_label)
-        row1.addWidget(self.port_combo)
-        row1.addWidget(self.refresh_button)
-        row1.addWidget(self.socket_host_label)
-        row1.addWidget(self.socket_host_input)
-        row1.addWidget(self.socket_port_label)
-        row1.addWidget(self.socket_port_input)
-        row1.addWidget(self.dtr_checkbox)
-        row1.addWidget(self.rts_checkbox)
-        row1.addWidget(self.connect_button)
-        row1.addStretch()
-
-        row2 = QHBoxLayout()
-        row2.addStretch()
-        row2.addWidget(self.parity_label)
-        row2.addWidget(self.parity_combo)
-        row2.addWidget(self.databits_label)
-        row2.addWidget(self.databits_combo)
-        row2.addWidget(self.stopbits_label)
-        row2.addWidget(self.stopbits_combo)
-        row2.addWidget(self.baudrate_label)
-        row2.addWidget(self.baudrate_combo)
-        row2.addWidget(self.rfc2217_timeout_label)
-        row2.addWidget(self.rfc2217_timeout_spinbox)
-        row2.addWidget(self.rfc2217_ignore_control_checkbox)
-        row2.addStretch()
-
-        port_layout.addLayout(row1)
-        port_layout.addLayout(row2)
-        self.port_group.setLayout(port_layout)
-        self._local_serial_widgets = [
-            self.port_label,
-            self.port_combo,
-            self.refresh_button,
-        ]
-        self._serial_parameter_widgets = [
-            self.baudrate_label,
-            self.baudrate_combo,
-            self.parity_label,
-            self.parity_combo,
-            self.databits_label,
-            self.databits_combo,
-            self.stopbits_label,
-            self.stopbits_combo,
-        ]
-        self._control_line_widgets = [
-            self.dtr_checkbox,
-            self.rts_checkbox,
-        ]
-        self._socket_connection_widgets = [
-            self.socket_host_label,
-            self.socket_host_input,
-            self.socket_port_label,
-            self.socket_port_input,
-        ]
-        self._rfc2217_option_widgets = [
-            self.rfc2217_timeout_label,
-            self.rfc2217_timeout_spinbox,
-            self.rfc2217_ignore_control_checkbox,
-        ]
+        # ── 连接配置组 ──
+        self.connection_panel = ConnectionPanel()
+        self.port_group = self.connection_panel
+        for name in (
+            "port_label",
+            "port_combo",
+            "refresh_button",
+            "connection_mode_button",
+            "socket_host_label",
+            "socket_host_input",
+            "socket_port_label",
+            "socket_port_input",
+            "rfc2217_timeout_label",
+            "rfc2217_timeout_spinbox",
+            "rfc2217_ignore_control_checkbox",
+            "baudrate_label",
+            "baudrate_combo",
+            "parity_label",
+            "parity_combo",
+            "databits_label",
+            "databits_combo",
+            "stopbits_label",
+            "stopbits_combo",
+            "dtr_checkbox",
+            "rts_checkbox",
+            "connect_button",
+        ):
+            setattr(self, name, getattr(self.connection_panel, name))
+        self.connection_panel.mode_requested.connect(self.toggle_connection_mode)
+        self.connection_panel.connect_requested.connect(self.toggle_connection)
+        self.connection_panel.refresh_requested.connect(self.refresh_ports)
+        self.connection_panel.dtr_changed.connect(self.toggle_dtr)
+        self.connection_panel.rts_changed.connect(self.toggle_rts)
         self._update_connection_mode_ui()
 
         # ── 终端显示区域（普通模式） ──
@@ -807,160 +722,175 @@ class SerialMonitor(QMainWindow):
     # ── 连接模式 ─────────────────────────────────────────────
 
     @property
+    def serial_handler(self) -> Any:
+        return self._serial_handler
+
+    @serial_handler.setter
+    def serial_handler(self, handler: Any) -> None:
+        self._serial_handler = handler
+        controller = self.__dict__.get("connection_controller")
+        if controller is not None:
+            controller.replace_handler(ConnectionMode.SERIAL, handler)
+
+    @property
+    def socket_handler(self) -> Any:
+        return self._socket_handler
+
+    @socket_handler.setter
+    def socket_handler(self, handler: Any) -> None:
+        self._socket_handler = handler
+        controller = self.__dict__.get("connection_controller")
+        if controller is not None:
+            controller.replace_handler(ConnectionMode.TCP, handler)
+
+    @property
+    def rfc2217_handler(self) -> Any:
+        return self._rfc2217_handler
+
+    @rfc2217_handler.setter
+    def rfc2217_handler(self, handler: Any) -> None:
+        self._rfc2217_handler = handler
+        controller = self.__dict__.get("connection_controller")
+        if controller is not None:
+            controller.replace_handler(ConnectionMode.RFC2217, handler)
+
+    @property
+    def connection_mode(self) -> str:
+        return self.connection_controller.mode.value
+
+    @connection_mode.setter
+    def connection_mode(self, mode: str) -> None:
+        self.connection_controller.set_mode(mode)
+
+    @property
     def active_handler(self) -> Any:
-        return {
-            "serial": self.serial_handler,
-            "tcp": self.socket_handler,
-            "rfc2217": self.rfc2217_handler,
-        }[self.connection_mode]
+        return self.connection_controller.active_handler
 
     @property
     def manual_disconnect(self) -> bool:
-        return self._manual_disconnect[self.connection_mode]
+        return self.connection_controller.manual_disconnect
 
     @manual_disconnect.setter
     def manual_disconnect(self, value: bool) -> None:
-        self._manual_disconnect[self.connection_mode] = value
+        self.connection_controller.manual_disconnect = value
 
     def is_connected(self) -> bool:
-        return bool(self.active_handler.is_open())
+        return self.connection_controller.is_connected()
 
     def is_connection_active(self) -> bool:
-        if self.is_connected():
-            return True
-        if self.connection_mode == "tcp":
-            return bool(self.socket_handler.is_connecting())
-        if self.connection_mode == "rfc2217":
-            return bool(self.rfc2217_handler.is_connecting())
-        return False
+        return self.connection_controller.is_active()
 
     def write_data(self, data: bytes) -> bool:
-        return self.active_handler.write_data(data)
+        return self.connection_controller.write_data(data)
 
     def connection_error(self) -> str:
-        return self.active_handler.last_error or ""
+        return self.connection_controller.connection_error()
+
+    @property
+    def _next_serial_reconnect_at(self) -> float:
+        return self.connection_controller.reconnect_deadline(ConnectionMode.SERIAL)
+
+    @property
+    def _next_socket_reconnect_at(self) -> float:
+        return self.connection_controller.reconnect_deadline(ConnectionMode.TCP)
+
+    @property
+    def _next_rfc2217_reconnect_at(self) -> float:
+        return self.connection_controller.reconnect_deadline(ConnectionMode.RFC2217)
 
     def toggle_connection_mode(self) -> None:
         if self.is_connection_active():
             return
+        self._capture_connection_settings(self.connection_mode)
         modes = ("serial", "tcp", "rfc2217")
         current_index = modes.index(self.connection_mode)
-        self.connection_mode = modes[(current_index + 1) % len(modes)]
+        self.connection_controller.set_mode(
+            modes[(current_index + 1) % len(modes)]
+        )
+        self._apply_connection_settings(self.connection_mode)
         self._receive_decoder.reset()
         self._receive_at_line_start = True
         self._receive_pending_cr = False
         self._update_connection_mode_ui()
         self.update_texts()
 
+    def _capture_connection_settings(self, mode: str) -> None:
+        settings = self.connection_panel.capture_settings(mode)
+        if isinstance(settings, SerialSettings):
+            self._serial_settings = settings
+        elif isinstance(settings, TcpSettings):
+            self._tcp_settings = settings
+        else:
+            self._rfc2217_settings = settings
+
+    def _apply_connection_settings(self, mode: str) -> None:
+        if mode == ConnectionMode.SERIAL.value:
+            settings = self._serial_settings
+        elif mode == ConnectionMode.TCP.value:
+            settings = self._tcp_settings
+        else:
+            settings = self._rfc2217_settings
+        self.connection_panel.apply_settings(mode, settings)
+
     def _update_connection_mode_ui(self) -> None:
-        serial_mode = self.connection_mode == "serial"
-        rfc2217_mode = self.connection_mode == "rfc2217"
-        for widget in self._local_serial_widgets:
-            widget.setVisible(serial_mode)
-        for widget in self._serial_parameter_widgets:
-            widget.setVisible(serial_mode or rfc2217_mode)
-        for widget in self._control_line_widgets:
-            widget.setVisible(serial_mode or rfc2217_mode)
-        for widget in self._socket_connection_widgets:
-            widget.setVisible(not serial_mode)
-        for widget in self._rfc2217_option_widgets:
-            widget.setVisible(rfc2217_mode)
+        self.connection_panel.set_mode(self.connection_mode)
 
     def _set_connection_controls_enabled(self, enabled: bool) -> None:
-        self.connection_mode_button.setEnabled(enabled)
-        configuration_widgets = (
-            self._local_serial_widgets
-            + self._serial_parameter_widgets
-            + self._socket_connection_widgets
-            + self._rfc2217_option_widgets
+        self.connection_panel.set_controls_enabled(
+            enabled,
+            mode=self.connection_mode,
+            is_connected=self.is_connected(),
         )
-        for widget in configuration_widgets:
-            widget.setEnabled(enabled)
-        control_lines_available = self.connection_mode in ("serial", "rfc2217")
-        for widget in self._control_line_widgets:
-            widget.setEnabled(
-                control_lines_available and (enabled or self.is_connected())
-            )
 
-    def _on_serial_connection_changed(
-        self, connected: bool, _endpoint: str
+    def _on_connection_state_changed(
+        self, mode: str, transition: TransportTransition
     ) -> None:
-        if self.connection_mode != "serial":
+        if mode != self.connection_mode:
             return
-        self._set_connection_controls_enabled(not connected)
+
+        if (
+            transition.current is TransportState.CONNECTED
+            and not self.terminal_mode
+        ):
+            self.append_to_terminal(
+                self.t("connected").format(transition.endpoint) + "\n",
+                with_timestamp=True,
+            )
+        elif transition.current is TransportState.DISCONNECTED:
+            silent = mode in self._silent_disconnect_modes
+            self._silent_disconnect_modes.discard(mode)
+            if (
+                transition.session_was_connected
+                and not silent
+                and not self.terminal_mode
+            ):
+                if transition.reason is DisconnectReason.USER:
+                    message = self.t("disconnected")
+                elif mode == ConnectionMode.SERIAL.value:
+                    message = self.t("device_disconnected").format(
+                        transition.endpoint
+                    )
+                elif mode == ConnectionMode.TCP.value:
+                    message = self.t("socket_disconnected").format(
+                        transition.endpoint
+                    )
+                else:
+                    message = self.t("rfc2217_disconnected").format(
+                        transition.endpoint
+                    )
+                self.append_to_terminal(message + "\n", with_timestamp=True)
+
+        self._set_connection_controls_enabled(
+            transition.current is TransportState.DISCONNECTED
+        )
         self.update_texts()
 
-    def _on_socket_connection_changed(
-        self, connected: bool, endpoint: str
-    ) -> None:
-        if connected:
-            self._socket_was_connected = True
-            self._next_socket_reconnect_at = 0.0
-            if self.connection_mode == "tcp" and not self.terminal_mode:
-                self.append_to_terminal(
-                    self.t("connected").format(endpoint) + "\n",
-                    with_timestamp=True,
-                )
-        else:
-            was_connected = self._socket_was_connected
-            connection_lost = was_connected and not self.manual_disconnect
-            self._socket_was_connected = False
-            self._next_socket_reconnect_at = time.monotonic() + 5.0
-            if (
-                was_connected
-                and not self._socket_close_silent
-                and self.connection_mode == "tcp"
-                and not self.terminal_mode
-            ):
-                message = (
-                    self.t("socket_disconnected").format(endpoint)
-                    if connection_lost
-                    else self.t("disconnected")
-                )
-                self.append_to_terminal(
-                    message + "\n",
-                    with_timestamp=True,
-                )
-            self._socket_show_error = True
-            self._socket_close_silent = False
-
-        if self.connection_mode == "tcp":
-            self._set_connection_controls_enabled(not connected)
-            self.update_texts()
-
-    def _on_rfc2217_connection_changed(
-        self, connected: bool, endpoint: str
-    ) -> None:
-        if connected:
-            self._rfc2217_was_connected = True
-            self._next_rfc2217_reconnect_at = 0.0
-            if self.connection_mode == "rfc2217" and not self.terminal_mode:
-                self.append_to_terminal(
-                    self.t("connected").format(endpoint) + "\n",
-                    with_timestamp=True,
-                )
-        else:
-            was_connected = self._rfc2217_was_connected
-            self._rfc2217_was_connected = False
-            self._next_rfc2217_reconnect_at = time.monotonic() + 5.0
-            if (
-                was_connected
-                and not self._rfc2217_close_silent
-                and self.connection_mode == "rfc2217"
-                and not self.terminal_mode
-            ):
-                message = (
-                    self.t("disconnected")
-                    if self.manual_disconnect
-                    else self.t("rfc2217_disconnected").format(endpoint)
-                )
-                self.append_to_terminal(message + "\n", with_timestamp=True)
-            self._rfc2217_show_error = True
-            self._rfc2217_close_silent = False
-
-        if self.connection_mode == "rfc2217":
-            self._set_connection_controls_enabled(not connected)
-            self.update_texts()
+    def _on_reconnecting(self, mode: str, endpoint: str) -> None:
+        if mode == self.connection_mode and not self.terminal_mode:
+            self.append_to_terminal(
+                self.t("reconnecting").format(endpoint) + "\n",
+                with_timestamp=True,
+            )
 
     # ── 终端模式 ─────────────────────────────────────────────
 
@@ -991,8 +921,11 @@ class SerialMonitor(QMainWindow):
 
     def _on_terminal_key(self, data: bytes) -> None:
         """终端模拟器键盘输入 → 发送到当前传输。"""
-        if self.is_connected():
-            self.write_data(data)
+        self.send_payload(
+            PayloadRequest(raw=data),
+            display_sent=False,
+            show_errors=False,
+        )
 
     # ── 搜索 ─────────────────────────────────────────────────
 
@@ -1163,19 +1096,19 @@ class SerialMonitor(QMainWindow):
             self.close_serial(silent=silent, device_lost=connection_lost)
 
     def open_serial(self, show_error: bool = True) -> None:
-        if self.serial_handler.is_open():
+        if self.is_connection_active():
             return
 
-        self.manual_disconnect = False
         port = self.port_combo.currentText()
         if not port:
             QMessageBox.warning(self, self.t("warning"), self.t("select_port"))
             return
+        self._capture_connection_settings(ConnectionMode.SERIAL.value)
 
         self._receive_decoder.reset()
         self._receive_at_line_start = True
         self._receive_pending_cr = False
-        ok = self.serial_handler.open(
+        config = SerialConnectionConfig(
             port=port,
             baudrate=self.baudrate_combo.currentText(),
             parity=self.parity_combo.currentText(),
@@ -1184,29 +1117,16 @@ class SerialMonitor(QMainWindow):
             dtr=self.dtr_checkbox.isChecked(),
             rts=self.rts_checkbox.isChecked(),
         )
+        ok = self.connection_controller.connect(config, interactive=show_error)
         if not ok:
-            if show_error:
-                QMessageBox.critical(
-                    self,
-                    self.t("error"),
-                    self.t("open_port_failed").format(
-                        self.serial_handler.last_error or ""
-                    ),
-                )
             return
 
         self.current_port = port
         self._set_connection_controls_enabled(False)
-
-        if not self.terminal_mode:
-            self.append_to_terminal(
-                self.t("connected").format(port) + "\n", with_timestamp=True
-            )
-
         self.update_texts()
 
     def open_socket(self, show_error: bool = True) -> None:
-        if self.socket_handler.is_open() or self.socket_handler.is_connecting():
+        if self.is_connection_active():
             return
 
         host = self.socket_host_input.text().strip()
@@ -1233,33 +1153,24 @@ class SerialMonitor(QMainWindow):
                 )
             return
 
-        self.manual_disconnect = False
-        self._socket_show_error = show_error
+        self._capture_connection_settings(ConnectionMode.TCP.value)
         self.current_socket_host = host
         self.current_socket_port = port
         self._receive_decoder.reset()
         self._receive_at_line_start = True
         self._receive_pending_cr = False
 
-        ok = self.socket_handler.open(host, port)
+        ok = self.connection_controller.connect(
+            TcpConnectionConfig(host, port), interactive=show_error
+        )
         if not ok:
-            self._next_socket_reconnect_at = time.monotonic() + 5.0
-            if show_error:
-                QMessageBox.critical(
-                    self,
-                    self.t("error"),
-                    self.t("open_socket_failed").format(
-                        self.socket_handler.last_error or ""
-                    ),
-                )
             return
 
-        self._next_socket_reconnect_at = 0.0
         self._set_connection_controls_enabled(False)
         self.update_texts()
 
     def open_rfc2217(self, show_error: bool = True) -> None:
-        if self.rfc2217_handler.is_open() or self.rfc2217_handler.is_connecting():
+        if self.is_connection_active():
             return
 
         host = self.socket_host_input.text().strip()
@@ -1286,18 +1197,16 @@ class SerialMonitor(QMainWindow):
                 )
             return
 
-        self.manual_disconnect = False
-        self._rfc2217_show_error = show_error
-        self._rfc2217_close_silent = False
+        self._capture_connection_settings(ConnectionMode.RFC2217.value)
         self.current_rfc2217_host = host
         self.current_rfc2217_port = port
         self._receive_decoder.reset()
         self._receive_at_line_start = True
         self._receive_pending_cr = False
 
-        ok = self.rfc2217_handler.open(
-            host,
-            port,
+        config = Rfc2217ConnectionConfig(
+            host=host,
+            port=port,
             baudrate=self.baudrate_combo.currentText(),
             parity=self.parity_combo.currentText(),
             databits=self.databits_combo.currentText(),
@@ -1307,62 +1216,47 @@ class SerialMonitor(QMainWindow):
             network_timeout=self.rfc2217_timeout_spinbox.value(),
             ignore_set_control=self.rfc2217_ignore_control_checkbox.isChecked(),
         )
+        ok = self.connection_controller.connect(config, interactive=show_error)
         if not ok:
-            self._next_rfc2217_reconnect_at = time.monotonic() + 5.0
             return
 
         self._set_connection_controls_enabled(False)
         self.update_texts()
 
     def close_serial(self, silent: bool = False, device_lost: bool = False) -> None:
-        was_open = self.serial_handler.is_open()
-        if was_open:
-            self.serial_handler.close()
-
-        if was_open and not silent and not self.terminal_mode:
-            if device_lost:
-                msg = self.t("device_disconnected").format(self.current_port) + "\n"
-            else:
-                msg = self.t("disconnected") + "\n"
-            self.append_to_terminal(msg, with_timestamp=True)
-
-        self._set_connection_controls_enabled(True)
-        self.update_texts()
+        if silent:
+            self._silent_disconnect_modes.add(ConnectionMode.SERIAL.value)
+        reason = (
+            DisconnectReason.DEVICE_REMOVED
+            if device_lost
+            else DisconnectReason.USER
+        )
+        self.connection_controller.disconnect(reason)
 
     def close_socket(
         self, silent: bool = False, connection_lost: bool = False
     ) -> None:
-        was_connected = self.socket_handler.is_open()
-        was_active = was_connected or self.socket_handler.is_connecting()
-        if not was_active:
+        if not self.is_connection_active():
             return
-        self._socket_close_silent = silent
-        self.socket_handler.close()
-        self._set_connection_controls_enabled(False)
-        self.update_texts()
+        if silent:
+            self._silent_disconnect_modes.add(ConnectionMode.TCP.value)
+        reason = (
+            DisconnectReason.REMOTE if connection_lost else DisconnectReason.USER
+        )
+        self.connection_controller.disconnect(reason)
 
     def close_rfc2217(self, silent: bool = False) -> None:
-        if not (
-            self.rfc2217_handler.is_open()
-            or self.rfc2217_handler.is_connecting()
-        ):
+        if not self.is_connection_active():
             return
-        self._rfc2217_close_silent = silent
-        self.rfc2217_handler.close()
-        self._set_connection_controls_enabled(False)
-        self.update_texts()
+        if silent:
+            self._silent_disconnect_modes.add(ConnectionMode.RFC2217.value)
+        self.connection_controller.disconnect()
 
     def toggle_dtr(self) -> None:
-        if self.connection_mode == "rfc2217":
-            self.rfc2217_handler.set_dtr(self.dtr_checkbox.isChecked())
-        elif self.connection_mode == "serial":
-            self.serial_handler.set_dtr(self.dtr_checkbox.isChecked())
+        self.connection_controller.set_dtr(self.dtr_checkbox.isChecked())
 
     def toggle_rts(self) -> None:
-        if self.connection_mode == "rfc2217":
-            self.rfc2217_handler.set_rts(self.rts_checkbox.isChecked())
-        elif self.connection_mode == "serial":
-            self.serial_handler.set_rts(self.rts_checkbox.isChecked())
+        self.connection_controller.set_rts(self.rts_checkbox.isChecked())
 
     # ── 终端显示 ─────────────────────────────────────────────
 
@@ -1418,18 +1312,6 @@ class SerialMonitor(QMainWindow):
             )
             self._receive_at_line_start = part.endswith(("\n", "\r"))
 
-    def _on_serial_transport_data(self, data: bytes) -> None:
-        if self.connection_mode == "serial":
-            self._on_serial_data(data)
-
-    def _on_socket_transport_data(self, data: bytes) -> None:
-        if self.connection_mode == "tcp":
-            self._on_serial_data(data)
-
-    def _on_rfc2217_transport_data(self, data: bytes) -> None:
-        if self.connection_mode == "rfc2217":
-            self._on_serial_data(data)
-
     def _on_serial_data(self, data: bytes) -> None:
         if not data:
             return
@@ -1445,129 +1327,128 @@ class SerialMonitor(QMainWindow):
             if text:
                 self._append_received_text(text)
 
-    def _on_serial_transport_error(self, message: str) -> None:
-        if self.connection_mode == "serial":
-            self._on_serial_error(message)
-
-    def _on_socket_transport_error(self, message: str) -> None:
-        if self.connection_mode != "tcp":
-            return
-
-        context = self.socket_handler.last_error_context
-        if context == "remote_closed":
-            return
-        if context == "connect":
-            self._next_socket_reconnect_at = time.monotonic() + 5.0
-            if self._socket_show_error:
-                QMessageBox.critical(
-                    self,
-                    self.t("error"),
-                    self.t("open_socket_failed").format(message),
-                )
-            else:
-                endpoint = (
-                    f"{self.current_socket_host}:{self.current_socket_port}"
-                )
-                self.append_to_terminal(
-                    self.t("socket_connect_error").format(endpoint, message) + "\n",
-                    with_timestamp=True,
-                )
-            return
-        self.append_to_terminal(
-            self.t("socket_io_error").format(message) + "\n",
-            with_timestamp=True,
-        )
-
-    def _on_rfc2217_transport_error(self, message: str) -> None:
-        if self.connection_mode != "rfc2217":
-            return
-
-        context = self.rfc2217_handler.last_error_context
-        if context == "connect":
-            self._next_rfc2217_reconnect_at = time.monotonic() + 5.0
-            if self._rfc2217_show_error:
-                QMessageBox.critical(
-                    self,
-                    self.t("error"),
-                    self.t("open_rfc2217_failed").format(message),
-                )
-            else:
-                endpoint = (
-                    f"{self.current_rfc2217_host}:{self.current_rfc2217_port}"
-                )
-                self.append_to_terminal(
-                    self.t("rfc2217_connect_error").format(endpoint, message)
-                    + "\n",
-                    with_timestamp=True,
-                )
-            return
-        self.append_to_terminal(
-            self.t("rfc2217_io_error").format(message) + "\n",
-            with_timestamp=True,
-        )
-
-    def _on_serial_error(self, message: str) -> None:
+    def _append_transport_error(self, message: str) -> None:
         if self.terminal_mode:
-            err_text = self.t("read_error").format(message)
             self.terminal_emulator.process_bytes(
-                err_text.encode("utf-8", errors="replace")
+                (message + "\r\n").encode("utf-8", errors="replace")
             )
         else:
-            self.append_to_terminal(
-                self.t("read_error").format(message) + "\n", with_timestamp=True
-            )
+            self.append_to_terminal(message + "\n", with_timestamp=True)
+
+    def _on_connection_error(
+        self, mode: str, error: TransportError, interactive: bool
+    ) -> None:
+        if mode != self.connection_mode or error.reason is DisconnectReason.REMOTE:
+            return
+
+        if error.operation is TransportOperation.CONNECT:
+            if mode == ConnectionMode.SERIAL.value:
+                dialog_key = "open_port_failed"
+                log_key = "open_port_failed"
+            elif mode == ConnectionMode.TCP.value:
+                dialog_key = "open_socket_failed"
+                log_key = "socket_connect_error"
+            else:
+                dialog_key = "open_rfc2217_failed"
+                log_key = "rfc2217_connect_error"
+            if interactive:
+                QMessageBox.critical(
+                    self,
+                    self.t("error"),
+                    self.t(dialog_key).format(error.message),
+                )
+            elif mode == ConnectionMode.SERIAL.value:
+                self._append_transport_error(self.t(log_key).format(error.message))
+            else:
+                self._append_transport_error(
+                    self.t(log_key).format(error.endpoint, error.message)
+                )
+            return
+
+        if mode == ConnectionMode.SERIAL.value:
+            message = self.t("read_error").format(error.message)
+        elif mode == ConnectionMode.TCP.value:
+            message = self.t("socket_io_error").format(error.message)
+        else:
+            message = self.t("rfc2217_io_error").format(error.message)
+        self._append_transport_error(message)
 
     # ── 数据发送 ─────────────────────────────────────────────
 
     def send_data(self) -> None:
-        if not self.is_connected():
-            QMessageBox.warning(self, self.t("warning"), self.t("not_connected"))
-            return
-
         data = self.send_input.text()
         if not data:
             return
-
-        auto_checksum = self.auto_checksum_checkbox.isChecked()
-        checksum_start = self.checksum_start_spinbox.value()
-        checksum_end_mode = self.checksum_end_combo.currentIndex()
-
-        try:
-            byte_values = parse_payload(data, is_hex=self.send_hex_mode)
-        except ValueError:
-            QMessageBox.warning(self, self.t("warning"), self.t("hex_even_chars"))
-            return
-
-        # 添加行尾符
         line_ending = self.line_ending_combo.currentData()
-        if line_ending:
-            byte_values += line_ending.encode("utf-8")
-
-        display_data = data
-        if auto_checksum:
-            res = apply_checksum(
-                byte_values,
-                checksum_start_1based=checksum_start,
-                checksum_end_mode=checksum_end_mode,
-            )
-            byte_values = res.payload
-            if res.valid_range and res.checksum is not None:
-                display_data += self.t("ck_tag").format(res.checksum)
-            else:
-                display_data += self.t("ck_invalid_range")
-
-        try:
-            if not self.write_data(byte_values):
-                raise RuntimeError(self.connection_error() or "write failed")
-            sent_key = "sent_hex" if self.send_hex_mode else "sent"
-            self.append_to_terminal(
-                self.t(sent_key).format(display_data) + "\n", with_timestamp=True
-            )
+        result = self.send_payload(
+            PayloadRequest(
+                text=data,
+                is_hex=self.send_hex_mode,
+                line_ending=(line_ending or "").encode("utf-8"),
+                auto_checksum=self.auto_checksum_checkbox.isChecked(),
+                checksum_start=self.checksum_start_spinbox.value(),
+                checksum_end_mode=self.checksum_end_combo.currentIndex(),
+            ),
+            display_text=data,
+            display_as_hex=self.send_hex_mode,
+        )
+        if result.accepted:
             self.send_input.clear()
-        except Exception as e:
+
+    def send_payload(
+        self,
+        request: PayloadRequest,
+        *,
+        display_text: str | None = None,
+        display_as_hex: bool = False,
+        sent_key: str | None = None,
+        queued_key: str | None = None,
+        display_sent: bool = True,
+        show_errors: bool = True,
+    ) -> SendResult:
+        result = self.payload_sender.send(request)
+        if result.status is SendStatus.NOT_CONNECTED:
+            if show_errors:
+                QMessageBox.warning(
+                    self, self.t("warning"), self.t("not_connected")
+                )
+            return result
+        if result.status is SendStatus.INVALID_PAYLOAD:
+            if show_errors:
+                QMessageBox.warning(
+                    self, self.t("warning"), self.t("hex_even_chars")
+                )
+            return result
+        if result.status is SendStatus.INVALID_CHECKSUM_RANGE:
+            if show_errors:
+                QMessageBox.warning(
+                    self, self.t("warning"), self.t("ck_invalid_range")
+                )
+            return result
+        if result.status is SendStatus.WRITE_FAILED:
+            if not show_errors:
+                return result
+            error = self.connection_error() or "write failed"
             QMessageBox.critical(
-                self, self.t("error"), self.t("send_failed").format(str(e))
+                self, self.t("error"), self.t("send_failed").format(error)
             )
+            return result
+
+        if display_sent and display_text is not None and not self.terminal_mode:
+            if result.checksum is not None:
+                display_text += self.t("ck_tag").format(result.checksum)
+            if result.status is SendStatus.QUEUED:
+                sent_key = queued_key or (
+                    "queued_hex" if display_as_hex else "queued"
+                )
+            else:
+                sent_key = sent_key or (
+                    "sent_hex" if display_as_hex else "sent"
+                )
+            self.append_to_terminal(
+                self.t(sent_key).format(display_text) + "\n", with_timestamp=True
+            )
+        return result
 
     # ── 模式切换 ─────────────────────────────────────────────
 
@@ -1619,88 +1500,16 @@ class SerialMonitor(QMainWindow):
     # ── 设备检测 ─────────────────────────────────────────────
 
     def check_device_connection(self) -> None:
-        if self.connection_mode == "rfc2217":
-            if (
-                self.auto_reconnect
-                and not self.rfc2217_handler.is_open()
-                and not self.rfc2217_handler.is_connecting()
-                and not self.manual_disconnect
-                and self.current_rfc2217_host
-                and self.current_rfc2217_port
-                and time.monotonic() >= self._next_rfc2217_reconnect_at
-            ):
-                endpoint = (
-                    f"{self.current_rfc2217_host}:{self.current_rfc2217_port}"
-                )
-                if not self.terminal_mode:
-                    self.append_to_terminal(
-                        self.t("reconnecting").format(endpoint) + "\n",
-                        with_timestamp=True,
+        if self.connection_mode == ConnectionMode.SERIAL.value:
+            config = self.connection_controller.current_config()
+            if isinstance(config, SerialConnectionConfig) and self.is_connected():
+                if config.port not in self.serial_handler.get_available_ports():
+                    self.connection_controller.disconnect(
+                        DisconnectReason.DEVICE_REMOVED
                     )
-                self.socket_host_input.setText(self.current_rfc2217_host)
-                self.socket_port_input.setText(str(self.current_rfc2217_port))
-                self.open_rfc2217(show_error=False)
-            return
-
-        if self.connection_mode == "tcp":
-            if (
-                self.auto_reconnect
-                and not self.socket_handler.is_open()
-                and not self.socket_handler.is_connecting()
-                and not self.manual_disconnect
-                and self.current_socket_host
-                and self.current_socket_port
-                and time.monotonic() >= self._next_socket_reconnect_at
-            ):
-                endpoint = (
-                    f"{self.current_socket_host}:{self.current_socket_port}"
-                )
-                if not self.terminal_mode:
-                    self.append_to_terminal(
-                        self.t("reconnecting").format(endpoint) + "\n",
-                        with_timestamp=True,
-                    )
-                self.socket_host_input.setText(self.current_socket_host)
-                self.socket_port_input.setText(str(self.current_socket_port))
-                self.open_socket(show_error=False)
-            return
-
-        available_ports = self.serial_handler.get_available_ports()
-
-        if self.serial_handler.is_open() and self.current_port:
-            if self.current_port not in available_ports:
-                self.close_serial(silent=False, device_lost=True)
-
-        if (
-            self.auto_reconnect
-            and not self.serial_handler.is_open()
-            and not self.manual_disconnect
-        ):
-            if self.current_port and self.current_port in available_ports:
-                if not self.terminal_mode:
-                    self.append_to_terminal(
-                        self.t("reconnecting").format(self.current_port) + "\n",
-                        with_timestamp=True,
-                    )
-                idx = self.port_combo.findText(self.current_port)
-                if idx >= 0:
-                    self.port_combo.setCurrentIndex(idx)
-                self.open_serial()
-            elif available_ports:
-                for port in available_ports:
-                    if "ttyUSB" in port or "ttyACM" in port:
-                        if not self.terminal_mode:
-                            self.append_to_terminal(
-                                self.t("device_found").format(port) + "\n",
-                                with_timestamp=True,
-                            )
-                        self.refresh_ports()
-                        idx = self.port_combo.findText(port)
-                        if idx >= 0:
-                            self.port_combo.setCurrentIndex(idx)
-                        self.current_port = port
-                        self.open_serial()
-                        break
+        self.connection_controller.poll_reconnect(
+            auto_reconnect=self.auto_reconnect
+        )
 
     # ── 校验和 ───────────────────────────────────────────────
 
@@ -1758,97 +1567,81 @@ class SerialMonitor(QMainWindow):
     # ── 设置持久化 ───────────────────────────────────────────
 
     def load_settings(self) -> None:
-        settings = ConfigManager.load_settings()
+        settings = ConfigManager.load_app_settings()
 
-        if "geometry" in settings:
-            self.restoreGeometry(bytes.fromhex(settings["geometry"]))
+        if settings.geometry:
+            self.restoreGeometry(bytes.fromhex(settings.geometry))
 
-        self.language = settings.get("language", "zh")
-        self.theme_combo.setCurrentIndex(settings.get("theme_index", 0))
-        self.baudrate_combo.setCurrentText(settings.get("baudrate", "115200"))
-        self.parity_combo.setCurrentText(settings.get("parity", "None"))
-        self.databits_combo.setCurrentText(settings.get("databits", "8"))
-        self.stopbits_combo.setCurrentText(settings.get("stopbits", "1"))
-        self.socket_host_input.setText(settings.get("socket_host", ""))
-        self.socket_port_input.setText(settings.get("socket_port", ""))
-        self.rfc2217_timeout_spinbox.setValue(
-            settings.get("rfc2217_timeout", 3.0)
-        )
-        self.rfc2217_ignore_control_checkbox.setChecked(
-            settings.get("rfc2217_ignore_set_control", False)
-        )
-        mode = settings.get("connection_mode", "serial")
-        self.connection_mode = (
-            mode if mode in ("serial", "tcp", "rfc2217") else "serial"
-        )
+        self.language = settings.language
+        self.theme_combo.setCurrentIndex(settings.theme_index)
+        self._serial_settings = settings.serial
+        self._tcp_settings = settings.tcp
+        self._rfc2217_settings = settings.rfc2217
+        self.connection_mode = settings.connection_mode
+        self._apply_connection_settings(self.connection_mode)
         self._update_connection_mode_ui()
 
-        self.receive_hex_mode = settings.get("receive_hex_mode", False)
-        self.send_hex_mode = settings.get("send_hex_mode", False)
-        self.auto_scroll = settings.get("auto_scroll", True)
-        self.show_timestamp = settings.get("show_timestamp", True)
-        self.enable_ansi_colors = settings.get("enable_ansi_colors", True)
-        self.auto_reconnect = settings.get("auto_reconnect", False)
+        self.receive_hex_mode = settings.receive_hex_mode
+        self.send_hex_mode = settings.send_hex_mode
+        self.auto_scroll = settings.auto_scroll
+        self.show_timestamp = settings.show_timestamp
+        self.enable_ansi_colors = settings.enable_ansi_colors
+        self.auto_reconnect = settings.auto_reconnect
 
         self.auto_scroll_checkbox.setChecked(self.auto_scroll)
         self.timestamp_checkbox.setChecked(self.show_timestamp)
         self.ansi_colors_checkbox.setChecked(self.enable_ansi_colors)
         self.auto_reconnect_checkbox.setChecked(self.auto_reconnect)
 
-        self.auto_checksum_checkbox.setChecked(settings.get("auto_checksum", False))
-        self.checksum_start_spinbox.setValue(settings.get("checksum_start", 1))
-        self.checksum_end_combo.setCurrentIndex(settings.get("checksum_end_mode", 0))
+        self.auto_checksum_checkbox.setChecked(settings.auto_checksum)
+        self.checksum_start_spinbox.setValue(settings.checksum_start)
+        self.checksum_end_combo.setCurrentIndex(settings.checksum_end_mode)
 
-        self.dtr_checkbox.setChecked(settings.get("dtr_state", False))
-        self.rts_checkbox.setChecked(settings.get("rts_state", False))
-
-        self.trim_manager.load_from_dict(settings)
+        self.trim_manager.enabled = settings.trim_enabled
+        self.trim_manager.max_lines = settings.max_terminal_lines
+        self.trim_manager.batch_lines = settings.trim_batch_lines
         self._rebuild_trim_menu()
 
-        # 恢复终端模式
-        if settings.get("terminal_mode", False):
+        if settings.terminal_mode:
             self.toggle_terminal_mode()
 
     def save_settings(self) -> None:
-        settings: dict[str, Any] = {
-            "geometry": self.saveGeometry().data().hex(),
-            "language": self.language,
-            "theme_index": self.theme_combo.currentIndex(),
-            "baudrate": self.baudrate_combo.currentText(),
-            "parity": self.parity_combo.currentText(),
-            "databits": self.databits_combo.currentText(),
-            "stopbits": self.stopbits_combo.currentText(),
-            "connection_mode": self.connection_mode,
-            "socket_host": self.socket_host_input.text().strip(),
-            "socket_port": self.socket_port_input.text().strip(),
-            "rfc2217_timeout": self.rfc2217_timeout_spinbox.value(),
-            "rfc2217_ignore_set_control": (
-                self.rfc2217_ignore_control_checkbox.isChecked()
-            ),
-            "receive_hex_mode": self.receive_hex_mode,
-            "send_hex_mode": self.send_hex_mode,
-            "auto_scroll": self.auto_scroll,
-            "show_timestamp": self.show_timestamp,
-            "enable_ansi_colors": self.enable_ansi_colors,
-            "auto_reconnect": self.auto_reconnect,
-            "auto_checksum": self.auto_checksum_checkbox.isChecked(),
-            "checksum_start": self.checksum_start_spinbox.value(),
-            "checksum_end_mode": self.checksum_end_combo.currentIndex(),
-            "dtr_state": self.dtr_checkbox.isChecked(),
-            "rts_state": self.rts_checkbox.isChecked(),
-            "terminal_mode": self.terminal_mode,
-        }
-        settings.update(self.trim_manager.to_dict())
-        ConfigManager.save_settings(settings)
+        self._capture_connection_settings(self.connection_mode)
+        settings = AppSettings(
+            geometry=self.saveGeometry().data().hex(),
+            language=self.language,
+            theme_index=self.theme_combo.currentIndex(),
+            connection_mode=self.connection_mode,
+            serial=self._serial_settings,
+            tcp=self._tcp_settings,
+            rfc2217=self._rfc2217_settings,
+            receive_hex_mode=self.receive_hex_mode,
+            send_hex_mode=self.send_hex_mode,
+            auto_scroll=self.auto_scroll,
+            show_timestamp=self.show_timestamp,
+            enable_ansi_colors=self.enable_ansi_colors,
+            auto_reconnect=self.auto_reconnect,
+            auto_checksum=self.auto_checksum_checkbox.isChecked(),
+            checksum_start=self.checksum_start_spinbox.value(),
+            checksum_end_mode=self.checksum_end_combo.currentIndex(),
+            terminal_mode=self.terminal_mode,
+            trim_enabled=self.trim_manager.enabled,
+            max_terminal_lines=self.trim_manager.max_lines,
+            trim_batch_lines=self.trim_manager.batch_lines,
+        )
+        ConfigManager.save_app_settings(settings)
         self.quick_send_manager.save_settings()
 
     def closeEvent(self, event: Any) -> None:
         self.save_settings()
-        self.device_check_timer.stop()
-        self.close_connection(silent=True)
-        self.socket_handler.shutdown()
         if not self.rfc2217_handler.shutdown():
             event.ignore()
             return
+        if not self.serial_handler.shutdown():
+            event.ignore()
+            return
+        self.device_check_timer.stop()
+        self.close_connection(silent=True)
+        self.socket_handler.shutdown()
         self.quick_send_manager.close()
         event.accept()

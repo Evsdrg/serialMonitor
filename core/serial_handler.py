@@ -11,7 +11,14 @@ from typing import Optional
 
 import serial
 import serial.tools.list_ports
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
+
+from core.transport import (
+    DisconnectReason,
+    TransportHandler,
+    TransportOperation,
+    TransportState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,19 +52,19 @@ class _SerialReadThread(QThread):
                 return
 
 
-class SerialHandler(QObject):
+class SerialHandler(TransportHandler):
     """串口通信处理类"""
-
-    data_received = pyqtSignal(bytes)
-    connection_changed = pyqtSignal(bool, str)
-    error_occurred = pyqtSignal(str)
 
     def __init__(self) -> None:
         super().__init__()
         self.serial_port: Optional[serial.Serial] = None
         self.current_port: Optional[str] = None
-        self.last_error: Optional[str] = None
+        self._target_port: Optional[str] = None
         self._reader_thread: Optional[_SerialReadThread] = None
+
+    @property
+    def endpoint(self) -> str:
+        return self.current_port or self._target_port or ""
 
     @staticmethod
     def get_available_ports() -> list[str]:
@@ -73,7 +80,11 @@ class SerialHandler(QObject):
 
     def is_open(self) -> bool:
         """检查串口是否打开。"""
-        return self.serial_port is not None and self.serial_port.is_open
+        return (
+            self._state is TransportState.CONNECTED
+            and self.serial_port is not None
+            and self.serial_port.is_open
+        )
 
     def open(
         self,
@@ -99,6 +110,8 @@ class SerialHandler(QObject):
         """
         if self.is_open():
             return True
+        self._target_port = port
+        self._transition(TransportState.CONNECTING)
 
         parity_map: dict[str, str] = {
             "N": serial.PARITY_NONE,
@@ -126,6 +139,7 @@ class SerialHandler(QObject):
                 stopbits=stopbits_map.get(stopbits, serial.STOPBITS_ONE),
                 bytesize=int(databits),
                 timeout=0.1,
+                write_timeout=1.0,
             )
             serial_port.dtr = dtr
             serial_port.rts = rts
@@ -133,14 +147,18 @@ class SerialHandler(QObject):
             serial_port.open()
             self.serial_port = serial_port
             self.current_port = port
+            self._target_port = None
             self.last_error = None
 
             self._start_reader()
-            self.connection_changed.emit(True, port)
+            self._transition(TransportState.CONNECTED)
             return True
-        except (OSError, serial.SerialException) as e:
-            self.last_error = str(e)
-            self.error_occurred.emit(str(e))
+        except (OSError, ValueError, serial.SerialException) as e:
+            self._emit_error(TransportOperation.CONNECT, str(e))
+            self._transition(
+                TransportState.DISCONNECTED, DisconnectReason.CONNECT_FAILED
+            )
+            self._target_port = None
             return False
 
     def _start_reader(self) -> None:
@@ -152,23 +170,42 @@ class SerialHandler(QObject):
         self._reader_thread.error_occurred.connect(self._on_reader_error)
         self._reader_thread.start()
 
-    def _stop_reader(self) -> None:
+    def _stop_reader(self, timeout_ms: int = 1000) -> bool:
         if self._reader_thread is None:
-            return
-        try:
-            self._reader_thread.stop()
-            self._reader_thread.wait(500)
-        finally:
-            self._reader_thread = None
+            return True
+
+        self._reader_thread.stop()
+        if self.serial_port is not None:
+            cancel_read = getattr(self.serial_port, "cancel_read", None)
+            if callable(cancel_read):
+                try:
+                    cancel_read()
+                except (OSError, serial.SerialException) as e:
+                    logger.debug("Failed to cancel serial read: %s", e)
+
+        if not self._reader_thread.wait(timeout_ms):
+            self.last_error = "Serial reader thread did not stop"
+            logger.error(self.last_error)
+            return False
+
+        self._reader_thread = None
+        return True
 
     def _on_reader_error(self, message: str) -> None:
-        self.last_error = message
-        self.close()
-        self.error_occurred.emit(message)
+        self.close(reason=DisconnectReason.IO_ERROR)
+        self._emit_error(TransportOperation.READ, message)
 
-    def close(self) -> None:
+    def close(
+        self, reason: DisconnectReason = DisconnectReason.USER
+    ) -> bool:
         """关闭串口。"""
-        self._stop_reader()
+        if self._state is TransportState.DISCONNECTED and self.serial_port is None:
+            return True
+        self._transition(TransportState.CLOSING)
+        if not self._stop_reader():
+            if self.last_error:
+                self._emit_error(TransportOperation.SHUTDOWN, self.last_error)
+            return False
         if self.serial_port:
             try:
                 if self.serial_port.is_open:
@@ -176,9 +213,18 @@ class SerialHandler(QObject):
             except (OSError, serial.SerialException) as e:
                 logger.warning("Error closing serial port: %s", e)
 
-            port = self.current_port
             self.serial_port = None
-            self.connection_changed.emit(False, port or "")
+        self._transition(TransportState.DISCONNECTED, reason)
+        return True
+
+    def shutdown(self, timeout_ms: int = 3000) -> bool:
+        if self.close():
+            return True
+
+        remaining_ms = max(0, timeout_ms - 1000)
+        if remaining_ms == 0 or not self._stop_reader(remaining_ms):
+            return False
+        return self.close()
 
     def set_dtr(self, level: bool) -> None:
         """设置 DTR 引脚电平。"""
@@ -186,7 +232,7 @@ class SerialHandler(QObject):
             try:
                 self.serial_port.dtr = level  # type: ignore[union-attr]
             except (OSError, serial.SerialException) as e:
-                logger.debug("Failed to set DTR: %s", e)
+                self._emit_error(TransportOperation.CONTROL, str(e))
 
     def set_rts(self, level: bool) -> None:
         """设置 RTS 引脚电平。"""
@@ -194,7 +240,7 @@ class SerialHandler(QObject):
             try:
                 self.serial_port.rts = level  # type: ignore[union-attr]
             except (OSError, serial.SerialException) as e:
-                logger.debug("Failed to set RTS: %s", e)
+                self._emit_error(TransportOperation.CONTROL, str(e))
 
     def write_data(self, data: bytes) -> bool:
         """写入数据到串口。
@@ -209,12 +255,15 @@ class SerialHandler(QObject):
             return False
 
         try:
-            self.serial_port.write(data)  # type: ignore[union-attr]
+            written = self.serial_port.write(data)  # type: ignore[union-attr]
+            if written != len(data):
+                message = f"Serial write accepted {written} of {len(data)} bytes"
+                self._emit_error(TransportOperation.WRITE, message)
+                return False
             self.last_error = None
             return True
         except (OSError, serial.SerialException) as e:
-            self.last_error = str(e)
-            self.error_occurred.emit(str(e))
+            self._emit_error(TransportOperation.WRITE, str(e))
             return False
 
     def check_device_exists(self) -> bool:

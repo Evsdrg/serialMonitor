@@ -3,12 +3,14 @@
 import socket
 import threading
 import time
+from unittest.mock import Mock
 
 import pytest
 import serial
 import serial.rfc2217
 
 from core.rfc2217_handler import Rfc2217Handler
+from core.transport import TransportOperation
 
 
 class _Rfc2217Redirector:
@@ -308,3 +310,23 @@ class TestRfc2217Handler:
         assert rfc_handler.write_data(b"data") is False
         assert rfc_handler.set_dtr(True) is False
         assert rfc_handler.set_rts(True) is False
+
+    def test_full_write_queue_emits_typed_write_error(self, qtbot, rfc_handler):
+        worker = Mock()
+        worker.enqueue.return_value = False
+        rfc_handler._worker = worker
+        rfc_handler._state = Rfc2217Handler.CONNECTED
+
+        with qtbot.waitSignal(rfc_handler.transport_error) as blocker:
+            assert rfc_handler.write_data(b"data") is False
+
+        assert blocker.args[0].operation is TransportOperation.WRITE
+
+    def test_worker_write_error_keeps_write_operation(self, qtbot, rfc_handler):
+        worker = Mock()
+        rfc_handler._worker = worker
+
+        with qtbot.waitSignal(rfc_handler.transport_error) as blocker:
+            rfc_handler._on_worker_error(worker, "write failed", "write")
+
+        assert blocker.args[0].operation is TransportOperation.WRITE

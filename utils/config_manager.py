@@ -10,8 +10,11 @@ import json
 import logging
 import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+
+from utils.settings import AppSettings
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +74,15 @@ class ConfigManager:
         """保存应用设置。"""
         cls.ensure_config_dir()
         _, settings_file, _ = cls._get_paths()
-        try:
-            with open(settings_file, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=4, ensure_ascii=False)
-        except OSError as e:
-            logger.error("Failed to save settings: %s", e)
+        cls._save_json(settings_file, settings, "settings")
+
+    @classmethod
+    def load_app_settings(cls) -> AppSettings:
+        return AppSettings.from_dict(cls.load_settings())
+
+    @classmethod
+    def save_app_settings(cls, settings: AppSettings) -> None:
+        cls.save_settings(settings.to_dict())
 
     @classmethod
     def load_quick_sends(cls) -> list[dict[str, Any]]:
@@ -95,8 +102,26 @@ class ConfigManager:
         """保存快捷发送列表。"""
         cls.ensure_config_dir()
         _, _, quick_send_file = cls._get_paths()
+        cls._save_json(quick_send_file, items, "quick sends")
+
+    @staticmethod
+    def _save_json(path: Path, data: Any, label: str) -> None:
+        temp_path: Path | None = None
         try:
-            with open(quick_send_file, "w", encoding="utf-8") as f:
-                json.dump(items, f, indent=4, ensure_ascii=False)
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            )
+            os.close(fd)
+            temp_path = Path(temp_name)
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
         except OSError as e:
-            logger.error("Failed to save quick sends: %s", e)
+            logger.error("Failed to save %s: %s", label, e)
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass

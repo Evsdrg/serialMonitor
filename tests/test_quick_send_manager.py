@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from core.payload_sender import PayloadRequest, SendResult, SendStatus
 from ui.quick_send_manager import QuickSendManager
 
 
@@ -15,6 +16,7 @@ def main_window():
     mw.language = "zh"
     mw.is_connected.return_value = True
     mw.write_data.return_value = True
+    mw.send_payload.return_value = SendResult(SendStatus.SENT, b"hello")
     return mw
 
 
@@ -176,64 +178,60 @@ class TestQuickSendManagerPositionPanel:
 
 class TestQuickSendManagerSendItem:
     def test_send_item_not_open(self, manager, main_window):
-        main_window.is_connected.return_value = False
+        main_window.send_payload.return_value = SendResult(
+            SendStatus.NOT_CONNECTED
+        )
         with patch("ui.quick_send_manager.QMessageBox") as mock_msg:
             manager.send_item("hello", False, False)
             mock_msg.warning.assert_called()
 
     def test_send_item_success(self, manager, main_window):
-        with patch("ui.quick_send_manager.parse_payload", return_value=b"hello"), \
-             patch("ui.quick_send_manager.apply_checksum", return_value=MagicMock(payload=b"hello", valid_range=None, checksum=None)):
-            manager.send_item("hello", False, False)
+        manager.send_item("hello", False, False)
 
-        main_window.write_data.assert_called_once_with(b"hello")
-        main_window.append_to_terminal.assert_called_once()
+        request = main_window.send_payload.call_args.args[0]
+        assert request == PayloadRequest(text="hello")
+        main_window.append_to_terminal.assert_not_called()
 
     def test_send_item_with_checksum(self, manager, main_window):
-        mock_res = MagicMock()
-        mock_res.payload = b"hello\x01"
-        mock_res.valid_range = (1, 5)
-        mock_res.checksum = 0xAB
+        manager.send_item(
+            "hello", False, True, checksum_start=1, checksum_end_mode=0
+        )
 
-        with patch("ui.quick_send_manager.parse_payload", return_value=b"hello"), \
-             patch("ui.quick_send_manager.apply_checksum", return_value=mock_res):
-            manager.send_item("hello", False, True, checksum_start=1, checksum_end_mode=0)
-
-        main_window.write_data.assert_called_once_with(b"hello\x01")
-        main_window.append_to_terminal.assert_called()
+        request = main_window.send_payload.call_args.args[0]
+        assert request.auto_checksum is True
+        assert request.checksum_start == 1
+        assert request.checksum_end_mode == 0
 
     def test_send_item_checksum_invalid_range(self, manager, main_window):
-        mock_res = MagicMock()
-        mock_res.payload = b"hello"
-        mock_res.valid_range = None
-        mock_res.checksum = None
+        main_window.send_payload.return_value = SendResult(
+            SendStatus.INVALID_CHECKSUM_RANGE, b"hello"
+        )
+        manager.send_item(
+            "hello", False, True, checksum_start=5, checksum_end_mode=1
+        )
 
-        with patch("ui.quick_send_manager.parse_payload", return_value=b"hello"), \
-             patch("ui.quick_send_manager.apply_checksum", return_value=mock_res):
-            manager.send_item("hello", False, True, checksum_start=5, checksum_end_mode=1)
-
-        main_window.write_data.assert_called_once_with(b"hello")
         main_window.append_to_terminal.assert_called()
 
     def test_send_item_write_failure(self, manager, main_window):
-        main_window.write_data.return_value = False
+        main_window.send_payload.return_value = SendResult(
+            SendStatus.WRITE_FAILED, b"hello"
+        )
         main_window.connection_error.return_value = "port busy"
 
-        with patch("ui.quick_send_manager.parse_payload", return_value=b"hello"), \
-             patch("ui.quick_send_manager.apply_checksum", return_value=MagicMock(payload=b"hello", valid_range=None, checksum=None)):
-            manager.send_item("hello", False, False)
+        manager.send_item("hello", False, False)
 
         main_window.append_to_terminal.assert_called()
 
     def test_send_item_with_line_ending(self, manager, main_window):
-        with patch("ui.quick_send_manager.parse_payload", return_value=b"cmd"), \
-             patch("ui.quick_send_manager.apply_checksum", return_value=MagicMock(payload=b"cmd", valid_range=None, checksum=None)):
-            manager.send_item("cmd", False, False, line_ending="\r\n")
+        manager.send_item("cmd", False, False, line_ending="\r\n")
 
-        main_window.write_data.assert_called_once_with(b"cmd\r\n")
+        request = main_window.send_payload.call_args.args[0]
+        assert request.line_ending == b"\r\n"
 
     def test_send_item_exception(self, manager, main_window):
-        with patch("ui.quick_send_manager.parse_payload", side_effect=ValueError("bad hex")):
-            manager.send_item("ZZ", True, False)
+        main_window.send_payload.return_value = SendResult(
+            SendStatus.INVALID_PAYLOAD
+        )
+        manager.send_item("ZZ", True, False)
 
         main_window.append_to_terminal.assert_called()

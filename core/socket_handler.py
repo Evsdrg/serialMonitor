@@ -4,27 +4,28 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtNetwork import QAbstractSocket, QTcpSocket
 
+from core.transport import (
+    DisconnectReason,
+    TransportHandler,
+    TransportOperation,
+    TransportState,
+)
 
-class SocketHandler(QObject):
+
+class SocketHandler(TransportHandler):
     """基于 Qt 事件循环的非阻塞透明 TCP client。"""
-
-    data_received = pyqtSignal(bytes)
-    connection_changed = pyqtSignal(bool, str)
-    error_occurred = pyqtSignal(str)
 
     def __init__(self) -> None:
         super().__init__()
         self._socket = QTcpSocket(self)
         self.current_host: Optional[str] = None
         self.current_port: Optional[int] = None
-        self.last_error: Optional[str] = None
-        self.last_error_context: Optional[str] = None
         self._session_active = False
         self._connected_once = False
         self._manual_close = False
+        self._disconnect_reason: Optional[DisconnectReason] = None
 
         self._socket.connected.connect(self._on_connected)
         self._socket.readyRead.connect(self._on_ready_read)
@@ -37,21 +38,8 @@ class SocketHandler(QObject):
             return ""
         return f"{self.current_host}:{self.current_port}"
 
-    def is_open(self) -> bool:
-        return (
-            self._socket.state()
-            == QAbstractSocket.SocketState.ConnectedState
-        )
-
-    def is_connecting(self) -> bool:
-        return self._socket.state() in (
-            QAbstractSocket.SocketState.HostLookupState,
-            QAbstractSocket.SocketState.ConnectingState,
-            QAbstractSocket.SocketState.ClosingState,
-        )
-
     def open(self, host: str, port: int | str) -> bool:
-        if self.is_open() or self.is_connecting():
+        if self._state is not TransportState.DISCONNECTED:
             return True
 
         try:
@@ -62,9 +50,7 @@ class SocketHandler(QObject):
             if not 1 <= socket_port <= 65535:
                 raise ValueError("Port must be between 1 and 65535")
         except ValueError as e:
-            self.last_error = str(e)
-            self.last_error_context = "connect"
-            self.error_occurred.emit(str(e))
+            self._emit_error(TransportOperation.CONNECT, str(e))
             return False
 
         self.current_host = host
@@ -72,16 +58,22 @@ class SocketHandler(QObject):
         self.last_error = None
         self.last_error_context = None
         self._manual_close = False
+        self._disconnect_reason = None
         self._session_active = True
         self._connected_once = False
+        self._transition(TransportState.CONNECTING)
         self._socket.connectToHost(host, socket_port)
         return True
 
-    def close(self) -> None:
-        if not self._session_active and not self.is_open() and not self.is_connecting():
+    def close(
+        self, reason: DisconnectReason = DisconnectReason.USER
+    ) -> None:
+        if self._state is TransportState.DISCONNECTED:
             return
 
         self._manual_close = True
+        self._disconnect_reason = reason
+        self._transition(TransportState.CLOSING)
         state = self._socket.state()
         if state == QAbstractSocket.SocketState.ClosingState:
             return
@@ -92,25 +84,24 @@ class SocketHandler(QObject):
                 and self._socket.state()
                 == QAbstractSocket.SocketState.UnconnectedState
             ):
-                self._finish_disconnected()
+                self._finish_disconnected(reason)
         else:
             self._socket.abort()
             if self._session_active:
-                self._finish_disconnected()
+                self._finish_disconnected(reason)
 
     def shutdown(self, timeout_ms: int = 1000) -> bool:
         self.close()
         if (
-            self._socket.state()
-            == QAbstractSocket.SocketState.UnconnectedState
+            self._state is TransportState.DISCONNECTED
         ):
             return True
         finished = self._socket.waitForDisconnected(timeout_ms)
         if not finished:
             self._socket.abort()
             if self._session_active:
-                self._finish_disconnected()
-        return finished
+                self._finish_disconnected(DisconnectReason.SHUTDOWN)
+        return finished or self._state is TransportState.DISCONNECTED
 
     def write_data(self, data: bytes) -> bool:
         if not self.is_open():
@@ -119,13 +110,12 @@ class SocketHandler(QObject):
         written = self._socket.write(data)
         if written < 0:
             message = self._socket.errorString()
-            self.last_error = message
-            self.last_error_context = "io"
-            self.error_occurred.emit(message)
+            self._emit_error(TransportOperation.WRITE, message)
             self._manual_close = True
+            self._disconnect_reason = DisconnectReason.IO_ERROR
             self._socket.abort()
             if self._session_active:
-                self._finish_disconnected()
+                self._finish_disconnected(DisconnectReason.IO_ERROR)
             return False
         self._socket.flush()
         self.last_error = None
@@ -133,6 +123,9 @@ class SocketHandler(QObject):
         return True
 
     def _on_connected(self) -> None:
+        if self._state is TransportState.CLOSING:
+            self._socket.disconnectFromHost()
+            return
         self.last_error = None
         self.last_error_context = None
         self._connected_once = True
@@ -142,7 +135,7 @@ class SocketHandler(QObject):
         self._socket.setSocketOption(
             QAbstractSocket.SocketOption.KeepAliveOption, 1
         )
-        self.connection_changed.emit(True, self.endpoint)
+        self._transition(TransportState.CONNECTED)
 
     def _on_ready_read(self) -> None:
         data = bytes(self._socket.readAll())
@@ -153,27 +146,50 @@ class SocketHandler(QObject):
         if self._manual_close:
             return
         message = self._socket.errorString()
-        self.last_error = message
         if not self._connected_once:
-            self.last_error_context = "connect"
+            operation = TransportOperation.CONNECT
+            context = "connect"
+            self._disconnect_reason = DisconnectReason.CONNECT_FAILED
         elif error == QAbstractSocket.SocketError.RemoteHostClosedError:
-            self.last_error_context = "remote_closed"
+            operation = TransportOperation.READ
+            context = "remote_closed"
+            self._disconnect_reason = DisconnectReason.REMOTE
         else:
-            self.last_error_context = "io"
-        self.error_occurred.emit(message)
+            operation = TransportOperation.READ
+            context = "io"
+            self._disconnect_reason = DisconnectReason.IO_ERROR
+        self._emit_error(
+            operation,
+            message,
+            reason=self._disconnect_reason,
+            legacy_context=context,
+        )
         if (
             self._session_active
             and self._socket.state()
             == QAbstractSocket.SocketState.UnconnectedState
         ):
-            self._finish_disconnected()
+            self._finish_disconnected(self._disconnect_reason)
 
     def _on_disconnected(self) -> None:
         if self._session_active:
-            self._finish_disconnected()
+            reason = self._disconnect_reason
+            if reason is None:
+                reason = (
+                    DisconnectReason.REMOTE
+                    if self._connected_once
+                    else DisconnectReason.CONNECT_FAILED
+                )
+            self._finish_disconnected(reason)
 
-    def _finish_disconnected(self) -> None:
-        endpoint = self.endpoint
+    def _finish_disconnected(
+        self, reason: DisconnectReason | None = None
+    ) -> None:
+        if self._state is TransportState.DISCONNECTED:
+            return
         self._session_active = False
         self._connected_once = False
-        self.connection_changed.emit(False, endpoint)
+        self._transition(
+            TransportState.DISCONNECTED,
+            reason or DisconnectReason.REMOTE,
+        )
