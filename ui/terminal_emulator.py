@@ -46,7 +46,7 @@ class TerminalEmulator(QTextEdit):
 
     维护一个字符网格，解析设备输出中的 ANSI 转义序列和光标控制码，
     将结果渲染到 QTextEdit 上。键盘事件通过 `key_pressed` 信号
-    转发给串口发送方。
+    转发给当前连接的发送方。
     """
 
     key_pressed = pyqtSignal(bytes)

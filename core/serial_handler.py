@@ -82,6 +82,8 @@ class SerialHandler(QObject):
         parity: str = "N",
         databits: int | str = 8,
         stopbits: float | str = 1,
+        dtr: bool = True,
+        rts: bool = True,
     ) -> bool:
         """打开串口。
 
@@ -117,14 +119,19 @@ class SerialHandler(QObject):
         }
 
         try:
-            self.serial_port = serial.Serial(
-                port=port,
+            serial_port = serial.Serial(
+                port=None,
                 baudrate=int(baudrate),
                 parity=parity_map.get(parity, serial.PARITY_NONE),
                 stopbits=stopbits_map.get(stopbits, serial.STOPBITS_ONE),
                 bytesize=int(databits),
                 timeout=0.1,
             )
+            serial_port.dtr = dtr
+            serial_port.rts = rts
+            serial_port.port = port
+            serial_port.open()
+            self.serial_port = serial_port
             self.current_port = port
             self.last_error = None
 

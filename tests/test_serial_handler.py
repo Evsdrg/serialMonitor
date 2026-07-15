@@ -160,6 +160,46 @@ class TestSerialHandlerInstance:
         assert call_kwargs["stopbits"] == 1.5
 
     @patch("core.serial_handler.SerialHandler._start_reader")
+    def test_open_applies_control_lines_before_open(self, mock_start_reader):
+        events = []
+
+        class FakePort:
+            def __init__(self):
+                self.is_open = False
+                self._dtr = True
+                self._rts = True
+
+            @property
+            def dtr(self):
+                return self._dtr
+
+            @dtr.setter
+            def dtr(self, value):
+                self._dtr = value
+                events.append(("dtr", value))
+
+            @property
+            def rts(self):
+                return self._rts
+
+            @rts.setter
+            def rts(self, value):
+                self._rts = value
+                events.append(("rts", value))
+
+            def open(self):
+                events.append(("open", None))
+                self.is_open = True
+
+        fake_port = FakePort()
+        handler = SerialHandler()
+
+        with patch("core.serial_handler.serial.Serial", return_value=fake_port):
+            assert handler.open("/dev/ttyUSB0", dtr=False, rts=False)
+
+        assert events == [("dtr", False), ("rts", False), ("open", None)]
+
+    @patch("core.serial_handler.SerialHandler._start_reader")
     @patch("core.serial_handler.serial.Serial")
     def test_close_emits_disconnected(self, mock_serial_class, mock_start_reader, qtbot):
         handler = SerialHandler()

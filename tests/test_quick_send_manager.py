@@ -13,8 +13,8 @@ from ui.quick_send_manager import QuickSendManager
 def main_window():
     mw = MagicMock()
     mw.language = "zh"
-    mw.serial_handler.is_open.return_value = True
-    mw.serial_handler.write_data.return_value = True
+    mw.is_connected.return_value = True
+    mw.write_data.return_value = True
     return mw
 
 
@@ -176,7 +176,7 @@ class TestQuickSendManagerPositionPanel:
 
 class TestQuickSendManagerSendItem:
     def test_send_item_not_open(self, manager, main_window):
-        main_window.serial_handler.is_open.return_value = False
+        main_window.is_connected.return_value = False
         with patch("ui.quick_send_manager.QMessageBox") as mock_msg:
             manager.send_item("hello", False, False)
             mock_msg.warning.assert_called()
@@ -186,7 +186,7 @@ class TestQuickSendManagerSendItem:
              patch("ui.quick_send_manager.apply_checksum", return_value=MagicMock(payload=b"hello", valid_range=None, checksum=None)):
             manager.send_item("hello", False, False)
 
-        main_window.serial_handler.write_data.assert_called_once_with(b"hello")
+        main_window.write_data.assert_called_once_with(b"hello")
         main_window.append_to_terminal.assert_called_once()
 
     def test_send_item_with_checksum(self, manager, main_window):
@@ -199,7 +199,7 @@ class TestQuickSendManagerSendItem:
              patch("ui.quick_send_manager.apply_checksum", return_value=mock_res):
             manager.send_item("hello", False, True, checksum_start=1, checksum_end_mode=0)
 
-        main_window.serial_handler.write_data.assert_called_once_with(b"hello\x01")
+        main_window.write_data.assert_called_once_with(b"hello\x01")
         main_window.append_to_terminal.assert_called()
 
     def test_send_item_checksum_invalid_range(self, manager, main_window):
@@ -212,12 +212,12 @@ class TestQuickSendManagerSendItem:
              patch("ui.quick_send_manager.apply_checksum", return_value=mock_res):
             manager.send_item("hello", False, True, checksum_start=5, checksum_end_mode=1)
 
-        main_window.serial_handler.write_data.assert_called_once_with(b"hello")
+        main_window.write_data.assert_called_once_with(b"hello")
         main_window.append_to_terminal.assert_called()
 
     def test_send_item_write_failure(self, manager, main_window):
-        main_window.serial_handler.write_data.return_value = False
-        main_window.serial_handler.last_error = "port busy"
+        main_window.write_data.return_value = False
+        main_window.connection_error.return_value = "port busy"
 
         with patch("ui.quick_send_manager.parse_payload", return_value=b"hello"), \
              patch("ui.quick_send_manager.apply_checksum", return_value=MagicMock(payload=b"hello", valid_range=None, checksum=None)):
@@ -230,7 +230,7 @@ class TestQuickSendManagerSendItem:
              patch("ui.quick_send_manager.apply_checksum", return_value=MagicMock(payload=b"cmd", valid_range=None, checksum=None)):
             manager.send_item("cmd", False, False, line_ending="\r\n")
 
-        main_window.serial_handler.write_data.assert_called_once_with(b"cmd\r\n")
+        main_window.write_data.assert_called_once_with(b"cmd\r\n")
 
     def test_send_item_exception(self, manager, main_window):
         with patch("ui.quick_send_manager.parse_payload", side_effect=ValueError("bad hex")):

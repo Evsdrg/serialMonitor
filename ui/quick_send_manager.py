@@ -73,7 +73,7 @@ class QuickSendManager:
         line_ending: str = "",
     ) -> None:
         """处理快捷发送请求"""
-        if not self.main_window.serial_handler.is_open():
+        if not self.main_window.is_connected():
             QMessageBox.warning(
                 self.main_window,
                 self.main_window.t("warning"),
@@ -100,10 +100,8 @@ class QuickSendManager:
                 else:
                     content_display += self.main_window.t("ck_invalid_range")
 
-            if not self.main_window.serial_handler.write_data(byte_values):
-                raise RuntimeError(
-                    self.main_window.serial_handler.last_error or "write failed"
-                )
+            if not self.main_window.write_data(byte_values):
+                raise RuntimeError(self.main_window.connection_error() or "write failed")
 
             msg_key = "quick_send_hex" if is_hex else "quick_send_ascii"
             self.main_window.append_to_terminal(

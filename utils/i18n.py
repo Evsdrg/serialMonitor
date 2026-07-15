@@ -15,9 +15,18 @@ class I18N:
     TEXTS: dict[str, dict[str, str]] = {
         "zh": {
             "window_title": "串口监视器",
-            "port_config": "端口配置",
+            "port_config": "连接配置",
             "port": "端口:",
             "refresh": "刷新端口",
+            "socket_host": "IP/主机:",
+            "socket_port": "端口:",
+            "switch_to_tcp": "TCP",
+            "switch_to_serial": "串口",
+            "mode_serial": "串口",
+            "mode_tcp": "TCP",
+            "mode_rfc2217": "RFC2217",
+            "rfc2217_timeout": "协议超时:",
+            "rfc2217_ignore_control": "兼容控制确认",
             "baudrate": "波特率:",
             "parity": "校验位:",
             "databits": "数据位:",
@@ -66,12 +75,22 @@ class I18N:
             "error": "错误",
             "info": "提示",
             "select_port": "请选择一个端口。",
-            "not_connected": "未连接到串口。",
+            "not_connected": "当前未连接。",
             "hex_even_chars": "十六进制数据必须有偶数个字符。",
             "invalid_hex": "无效的十六进制数据。",
             "open_port_failed": "无法打开串口:\n{}",
+            "open_socket_failed": "无法连接 TCP 服务:\n{}",
+            "open_rfc2217_failed": "无法建立 RFC2217 连接:\n{}",
+            "enter_socket_endpoint": "请输入 IP/主机和端口。",
+            "invalid_socket_port": "TCP 端口必须在 1 到 65535 之间。",
             "send_failed": "发送数据失败:\n{}",
             "device_disconnected": "设备 {} 已断开",
+            "socket_disconnected": "TCP 连接 {} 已断开",
+            "socket_connect_error": "TCP 连接 {} 失败: {}",
+            "socket_io_error": "TCP 传输错误: {}",
+            "rfc2217_disconnected": "RFC2217 连接 {} 已断开",
+            "rfc2217_connect_error": "RFC2217 连接 {} 失败: {}",
+            "rfc2217_io_error": "RFC2217 传输错误: {}",
             "reconnecting": "正在尝试重新连接 {}...",
             "device_found": "发现设备 {}，正在尝试连接...",
             "read_error": "读取数据时出错: {}",
@@ -118,7 +137,7 @@ class I18N:
 # 使用说明
 
 ## 1. 端口配置
-在左上角选择串口号、波特率、数据位、校验位和停止位，点击“连接”按钮即可打开串口。
+左上角支持本地串口、透明 TCP 和 RFC2217。串口模式下选择本地端口和串口参数；TCP 模式传输原始字节，不处理 Telnet；RFC2217 模式使用 IP/主机、端口及串口参数，并支持远程 DTR/RTS 控制。RFC2217 不提供认证和加密，只应在可信网络中使用。
 - **刷新端口**：如果设备未显示，点击刷新按钮。
 - **自动重连**：勾选后，若设备意外断开（非手动断开），程序会自动尝试重新连接。
 - **DTR/RTS**：手动控制 DTR (Data Terminal Ready) 和 RTS (Request to Send) 信号线的电平。
@@ -156,9 +175,18 @@ class I18N:
         },
         "en": {
             "window_title": "Serial Monitor",
-            "port_config": "Port Configuration",
+            "port_config": "Connection Configuration",
             "port": "Port:",
             "refresh": "Refresh Ports",
+            "socket_host": "IP/Host:",
+            "socket_port": "Port:",
+            "switch_to_tcp": "TCP",
+            "switch_to_serial": "Serial",
+            "mode_serial": "Serial",
+            "mode_tcp": "TCP",
+            "mode_rfc2217": "RFC2217",
+            "rfc2217_timeout": "Protocol timeout:",
+            "rfc2217_ignore_control": "Compatible control ACK",
             "baudrate": "Baudrate:",
             "parity": "Parity:",
             "databits": "Data Bits:",
@@ -207,12 +235,22 @@ class I18N:
             "error": "Error",
             "info": "Info",
             "select_port": "Please select a port.",
-            "not_connected": "Not connected to a serial port.",
+            "not_connected": "Not connected.",
             "hex_even_chars": "Hex data must have even number of characters.",
             "invalid_hex": "Invalid hex data.",
             "open_port_failed": "Failed to open serial port:\n{}",
+            "open_socket_failed": "Failed to connect to TCP service:\n{}",
+            "open_rfc2217_failed": "Failed to establish RFC2217 connection:\n{}",
+            "enter_socket_endpoint": "Enter an IP/host and port.",
+            "invalid_socket_port": "TCP port must be between 1 and 65535.",
             "send_failed": "Failed to send data:\n{}",
             "device_disconnected": "Device {} disconnected",
+            "socket_disconnected": "TCP connection {} disconnected",
+            "socket_connect_error": "TCP connection {} failed: {}",
+            "socket_io_error": "TCP transport error: {}",
+            "rfc2217_disconnected": "RFC2217 connection {} disconnected",
+            "rfc2217_connect_error": "RFC2217 connection {} failed: {}",
+            "rfc2217_io_error": "RFC2217 transport error: {}",
             "reconnecting": "Attempting to reconnect to {}...",
             "device_found": "Found device {}, attempting to connect...",
             "read_error": "Error reading data: {}",
@@ -259,7 +297,7 @@ class I18N:
 # User Manual
 
 ## 1. Port Configuration
-Select the serial port, baudrate, data bits, parity, and stop bits, then click "Connect".
+The connection area supports local Serial, transparent TCP, and RFC2217. Serial mode uses a local port and serial settings. TCP mode transfers raw bytes without Telnet processing. RFC2217 uses an IP/host, port, and serial settings with remote DTR/RTS control. RFC2217 has no authentication or encryption and should only be used on trusted networks.
 - **Refresh**: Click to update the port list.
 - **Auto Connect**: If enabled, the program will try to reconnect if the device is disconnected unexpectedly.
 - **DTR/RTS**: Manually control DTR (Data Terminal Ready) and RTS (Request to Send) signal lines.
