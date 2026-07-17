@@ -604,33 +604,64 @@ class TestSerialHandlerClosePath:
         assert handler.last_error == "device disconnected"
         assert handler.serial_port is None
 
+    def test_stale_reader_data_is_ignored_after_reopen(self):
+        handler = SerialHandler()
+        old_reader = Mock()
+        new_reader = Mock()
+        handler._reader_thread = new_reader
+        handler._state = TransportState.CONNECTED
+        received = []
+        handler.data_received.connect(received.append)
+
+        handler._on_reader_data(old_reader, b"old session")
+        handler._on_reader_data(new_reader, b"new session")
+
+        assert received == [b"new session"]
+
+    def test_stale_reader_error_does_not_close_new_session(self):
+        handler = SerialHandler()
+        old_reader = Mock()
+        new_reader = Mock()
+        handler._reader_thread = new_reader
+        handler._state = TransportState.CONNECTED
+        handler.serial_port = Mock(is_open=True)
+
+        handler._on_reader_error(old_reader, "old session")
+
+        assert handler.state is TransportState.CONNECTED
+        assert handler.serial_port is not None
+
     def test_set_dtr_not_open(self):
         handler = SerialHandler()
-        handler.set_dtr(True)  # 不抛异常
+        assert handler.set_dtr(True) is False
 
     def test_set_rts_not_open(self):
         handler = SerialHandler()
-        handler.set_rts(False)  # 不抛异常
+        assert handler.set_rts(False) is False
 
     def test_set_dtr_exception(self):
+        from unittest.mock import PropertyMock
+
         handler = SerialHandler()
         mock_port = Mock()
         mock_port.is_open = True
-        type(mock_port).dtr = Mock(side_effect=OSError("bus error"))
+        type(mock_port).dtr = PropertyMock(side_effect=OSError("bus error"))
         handler.serial_port = mock_port
         handler._state = TransportState.CONNECTED
 
-        handler.set_dtr(True)  # 异常被捕获
+        assert handler.set_dtr(True) is False
 
     def test_set_rts_exception(self):
+        from unittest.mock import PropertyMock
+
         handler = SerialHandler()
         mock_port = Mock()
         mock_port.is_open = True
-        type(mock_port).rts = Mock(side_effect=OSError("bus error"))
+        type(mock_port).rts = PropertyMock(side_effect=OSError("bus error"))
         handler.serial_port = mock_port
         handler._state = TransportState.CONNECTED
 
-        handler.set_rts(True)  # 异常被捕获
+        assert handler.set_rts(True) is False
 
     def test_write_data_exception(self, qtbot):
         handler = SerialHandler()

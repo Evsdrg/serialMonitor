@@ -1,5 +1,5 @@
-PyQt6
+PyQt6==6.11.0
 # Unreleased upstream fix for Python 3.10+ threading deprecations.
 pyserial @ git+https://github.com/pyserial/pyserial.git@17f8cc3480bd2762a53efed667295334ae76762a
-pyinstaller
-pyqtdarktheme
+pyinstaller==6.19.0
+pyqtdarktheme==0.1.7

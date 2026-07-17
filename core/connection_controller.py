@@ -205,10 +205,11 @@ class ConnectionController(QObject):
     def disconnect(
         self, reason: DisconnectReason = DisconnectReason.USER
     ) -> None:
-        if self.state is TransportState.DISCONNECTED:
-            return
         if reason is DisconnectReason.USER:
             self._manual_disconnect[self._mode] = True
+            self._reconnect_deadlines[self._mode] = 0.0
+        if self.state is TransportState.DISCONNECTED:
+            return
         if isinstance(self.active_handler, TransportHandler):
             self.active_handler.close(reason=reason)  # type: ignore[attr-defined]
         else:

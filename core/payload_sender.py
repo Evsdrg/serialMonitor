@@ -70,11 +70,16 @@ class PayloadSender:
 
         checksum = None
         if request.auto_checksum:
-            checksum_result = apply_checksum(
-                payload,
-                checksum_start_1based=request.checksum_start,
-                checksum_end_mode=request.checksum_end_mode,
-            )
+            try:
+                checksum_result = apply_checksum(
+                    payload,
+                    checksum_start_1based=request.checksum_start,
+                    checksum_end_mode=request.checksum_end_mode,
+                )
+            except (TypeError, ValueError):
+                return SendResult(
+                    SendStatus.INVALID_CHECKSUM_RANGE, payload=payload
+                )
             if not checksum_result.valid_range:
                 return SendResult(
                     SendStatus.INVALID_CHECKSUM_RANGE, payload=payload

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import math
 import queue
 import socket
 import threading
@@ -125,6 +126,7 @@ class _Rfc2217Worker(QThread):
                 parity=self.parity,
                 stopbits=self.stopbits,
                 timeout=0.05,
+                # RFC2217 does not support pySerial's write_timeout option.
                 write_timeout=None,
                 xonxoff=False,
                 rtscts=False,
@@ -135,6 +137,11 @@ class _Rfc2217Worker(QThread):
             remote.rts = self.rts
             self._remote = remote
             remote.open()
+            remote_socket = getattr(remote, "_socket", None)
+            if remote_socket is not None:
+                # pySerial uses sendall() for writes; bound that call so a
+                # close request cannot wait indefinitely on a stalled peer.
+                remote_socket.settimeout(1.0)
 
             if self._stop_event.is_set() or self._close_requested.is_set():
                 return
@@ -152,17 +159,24 @@ class _Rfc2217Worker(QThread):
                 data = remote.read(remote.in_waiting or 1)
                 if data:
                     self.data_received.emit(self, data)
+                elif (
+                    getattr(remote, "_thread", None) is not None
+                    and not remote._thread.is_alive()
+                ):
+                    raise _WorkerCommandError(
+                        "remote", serial.SerialException("RFC2217 peer disconnected")
+                    )
         except _WorkerCommandError as e:
             if not self._stop_event.is_set() and not self._close_requested.is_set():
                 self.error_occurred.emit(self, str(e), e.context)
         except (OSError, ValueError, serial.SerialException) as e:
             if not self._stop_event.is_set() and not self._close_requested.is_set():
-                context = "io" if connected else "connect"
+                context = self._error_context(remote, connected)
                 self.error_occurred.emit(self, str(e), context)
         except Exception as e:
             if not self._stop_event.is_set() and not self._close_requested.is_set():
                 logger.exception("Unexpected RFC2217 worker error")
-                context = "io" if connected else "connect"
+                context = self._error_context(remote, connected)
                 self.error_occurred.emit(self, str(e), context)
         finally:
             if remote is not None:
@@ -173,6 +187,15 @@ class _Rfc2217Worker(QThread):
                     logger.warning("Error closing RFC2217 connection: %s", e)
             self._remote = None
             self._worker_done.set()
+
+    @staticmethod
+    def _error_context(
+        remote: Optional[serial.rfc2217.Serial], connected: bool
+    ) -> str:
+        if not connected:
+            return "connect"
+        reader = getattr(remote, "_thread", None)
+        return "remote" if reader is not None and not reader.is_alive() else "io"
 
     def _process_commands(self, remote: serial.rfc2217.Serial) -> None:
         while True:
@@ -263,7 +286,7 @@ class Rfc2217Handler(TransportHandler):
                 raise ValueError("Host is required")
             if not 1 <= socket_port <= 65535:
                 raise ValueError("Port must be between 1 and 65535")
-            if timeout <= 0:
+            if not math.isfinite(timeout) or timeout <= 0:
                 raise ValueError("Network timeout must be greater than zero")
             serial_baudrate = int(baudrate)
             serial_databits = int(databits)
@@ -388,6 +411,9 @@ class Rfc2217Handler(TransportHandler):
         if context == "connect":
             operation = TransportOperation.CONNECT
             self._disconnect_reason = DisconnectReason.CONNECT_FAILED
+        elif context == "remote":
+            operation = TransportOperation.READ
+            self._disconnect_reason = DisconnectReason.REMOTE
         elif context == "write":
             operation = TransportOperation.WRITE
             self._disconnect_reason = DisconnectReason.IO_ERROR
@@ -403,6 +429,8 @@ class Rfc2217Handler(TransportHandler):
             reason=self._disconnect_reason,
             legacy_context=context,
         )
+        if self._state is not TransportState.DISCONNECTED:
+            self._transition(TransportState.CLOSING, self._disconnect_reason)
 
     def _on_worker_finished(self) -> None:
         worker = self.sender()

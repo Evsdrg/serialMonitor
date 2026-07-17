@@ -124,6 +124,21 @@ def test_controller_serial_reconnect_requires_original_port(qtbot):
     assert serial.open.call_count == 1
 
 
+def test_user_disconnect_cancels_reconnect_while_already_disconnected():
+    now = [10.0]
+    controller, _serial, tcp, _rfc2217 = _controller(clock=lambda: now[0])
+    tcp.open = Mock(return_value=False)
+    controller.set_mode(ConnectionMode.TCP)
+    controller.connect(TcpConnectionConfig("127.0.0.1", 9000))
+    assert controller.reconnect_deadline(ConnectionMode.TCP) == 15.0
+
+    controller.disconnect(DisconnectReason.USER)
+    now[0] = 15.0
+
+    assert controller.poll_reconnect(auto_reconnect=True) is False
+    assert tcp.open.call_count == 1
+
+
 def test_controller_dispatches_rfc2217_configuration():
     controller, _serial, _tcp, rfc2217 = _controller()
     rfc2217.open = Mock(return_value=True)

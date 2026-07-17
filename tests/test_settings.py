@@ -82,3 +82,23 @@ def test_all_protocol_checksum_end_modes_round_trip():
         )
 
         assert settings.checksum_end_mode == mode
+
+
+def test_non_finite_network_timeout_falls_back():
+    settings = AppSettings.from_dict(
+        {
+            "schema_version": 2,
+            "connections": {"rfc2217": {"network_timeout": "NaN"}},
+        }
+    )
+
+    assert settings.rfc2217.network_timeout == 3.0
+
+
+def test_overflowing_integer_settings_fall_back():
+    settings = AppSettings.from_dict(
+        {"checksum_start": 1e309, "max_terminal_lines": 1e309}
+    )
+
+    assert settings.checksum_start == 1
+    assert settings.max_terminal_lines == 5000

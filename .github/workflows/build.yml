@@ -102,6 +102,9 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller SerialMonitor.spec
 
+      - name: Smoke test frozen executable
+        run: timeout 10s env QT_QPA_PLATFORM=offscreen ./dist/SerialMonitor || test $? -eq 124
+
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:

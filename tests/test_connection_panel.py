@@ -55,6 +55,18 @@ def test_control_lines_remain_available_while_connected(qtbot):
     assert panel.rts_checkbox.isEnabled() is True
 
 
+def test_switching_to_serial_reenables_control_lines(qtbot):
+    panel = ConnectionPanel()
+    qtbot.addWidget(panel)
+
+    panel.set_controls_enabled(False, mode="tcp", is_connected=False)
+    panel.set_mode("serial")
+    panel.set_controls_enabled(True, mode="serial", is_connected=False)
+
+    assert panel.dtr_checkbox.isEnabled() is True
+    assert panel.rts_checkbox.isEnabled() is True
+
+
 def test_panel_emits_user_commands(qtbot):
     panel = ConnectionPanel()
     qtbot.addWidget(panel)

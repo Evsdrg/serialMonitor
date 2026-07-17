@@ -108,6 +108,42 @@ class TestConfigManager:
             result = ConfigManager.load_quick_sends()
             assert result == []
 
+    def test_load_quick_sends_sanitizes_malformed_items(self, tmp_path):
+        quick_send_file = tmp_path / "quick_sends.json"
+        with open(quick_send_file, "w", encoding="utf-8") as f:
+            json.dump(
+                [
+                    {
+                        "content": 123,
+                        "is_hex": "yes",
+                        "auto_checksum": True,
+                        "checksum_start": -5,
+                        "checksum_end_mode": 99,
+                        "line_ending": None,
+                    },
+                    {"checksum_start": 1e309, "checksum_end_mode": 1e309},
+                    "not an item",
+                ],
+                f,
+            )
+
+        with patch.object(ConfigManager, "_CONFIG_DIR", tmp_path):
+            ConfigManager._SETTINGS_FILE = tmp_path / "settings.json"
+            ConfigManager._QUICK_SEND_FILE = quick_send_file
+            result = ConfigManager.load_quick_sends()
+
+        assert result == [
+            {
+                "content": "",
+                "is_hex": False,
+                "auto_checksum": True,
+                "checksum_start": 1,
+                "checksum_end_mode": 0,
+                "line_ending": "",
+            },
+            {"checksum_start": 1, "checksum_end_mode": 0},
+        ]
+
     def test_save_quick_sends(self, tmp_path):
         items = [
             {"content": "AT", "is_hex": False, "checked": True},

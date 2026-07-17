@@ -172,6 +172,15 @@ class ConnectionPanel(QGroupBox):
         for widget in self.rfc2217_option_widgets:
             widget.setVisible(rfc2217_mode)
 
+    def select_serial_port(self, port: str) -> None:
+        if not port:
+            return
+        index = self.port_combo.findText(port)
+        if index < 0:
+            self.port_combo.addItem(port)
+            index = self.port_combo.findText(port)
+        self.port_combo.setCurrentIndex(index)
+
     def set_controls_enabled(
         self, enabled: bool, *, mode: str, is_connected: bool
     ) -> None:

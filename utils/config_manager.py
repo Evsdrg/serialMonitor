@@ -92,10 +92,74 @@ class ConfigManager:
             return []
         try:
             with open(quick_send_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                raw_items = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to load quick sends: %s", e)
             return []
+        if not isinstance(raw_items, list):
+            logger.warning("Ignoring malformed quick sends root")
+            return []
+        return [
+            normalized
+            for item in raw_items
+            if (normalized := cls._normalize_quick_send(item)) is not None
+        ]
+
+    @staticmethod
+    def _normalize_quick_send(item: Any) -> dict[str, Any] | None:
+        if not isinstance(item, dict):
+            return None
+
+        checksum_start = item.get("checksum_start", 1)
+        if isinstance(checksum_start, bool):
+            checksum_start = 1
+        try:
+            checksum_start = int(checksum_start)
+        except (OverflowError, TypeError, ValueError):
+            checksum_start = 1
+        if checksum_start < 1:
+            checksum_start = 1
+
+        checksum_end_mode = item.get("checksum_end_mode", 0)
+        if isinstance(checksum_end_mode, bool):
+            checksum_end_mode = 0
+        try:
+            checksum_end_mode = int(checksum_end_mode)
+        except (OverflowError, TypeError, ValueError):
+            checksum_end_mode = 0
+        if not 0 <= checksum_end_mode <= 4:
+            checksum_end_mode = 0
+
+        line_ending = item.get("line_ending", "")
+        if line_ending not in ("", "\n", "\r\n", "\r"):
+            line_ending = ""
+
+        normalized: dict[str, Any] = {}
+        if "content" in item:
+            normalized["content"] = (
+                item.get("content") if isinstance(item.get("content"), str) else ""
+            )
+        if "is_hex" in item:
+            normalized["is_hex"] = (
+                item.get("is_hex") if isinstance(item.get("is_hex"), bool) else False
+            )
+        if "auto_checksum" in item:
+            normalized["auto_checksum"] = (
+                item.get("auto_checksum")
+                if isinstance(item.get("auto_checksum"), bool)
+                else False
+            )
+        if "checked" in item:
+            normalized["checked"] = (
+                item.get("checked") if isinstance(item.get("checked"), bool) else True
+            )
+        if "checksum_start" in item:
+            normalized["checksum_start"] = checksum_start
+        if "checksum_end_mode" in item:
+            normalized["checksum_end_mode"] = checksum_end_mode
+        if "line_ending" in item:
+            normalized["line_ending"] = line_ending
+        return normalized
 
     @classmethod
     def save_quick_sends(cls, items: list[dict[str, Any]]) -> None:

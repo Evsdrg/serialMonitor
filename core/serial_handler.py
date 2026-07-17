@@ -28,6 +28,8 @@ class _SerialReadThread(QThread):
 
     data_received = pyqtSignal(bytes)
     error_occurred = pyqtSignal(str)
+    session_data_received = pyqtSignal(object, bytes)
+    session_error_occurred = pyqtSignal(object, str)
 
     def __init__(self, serial_port: serial.Serial) -> None:
         super().__init__()
@@ -43,12 +45,15 @@ class _SerialReadThread(QThread):
                 data = self._serial_port.read(4096)
                 if data:
                     self.data_received.emit(data)
+                    self.session_data_received.emit(self, data)
             except (OSError, serial.SerialException) as e:
                 self.error_occurred.emit(str(e))
+                self.session_error_occurred.emit(self, str(e))
                 return
             except Exception as e:
                 logger.exception("Unexpected error in serial read thread")
                 self.error_occurred.emit(str(e))
+                self.session_error_occurred.emit(self, str(e))
                 return
 
 
@@ -166,8 +171,8 @@ class SerialHandler(TransportHandler):
         if not self.serial_port:
             return
         self._reader_thread = _SerialReadThread(self.serial_port)
-        self._reader_thread.data_received.connect(self.data_received)
-        self._reader_thread.error_occurred.connect(self._on_reader_error)
+        self._reader_thread.session_data_received.connect(self._on_reader_data)
+        self._reader_thread.session_error_occurred.connect(self._on_reader_error)
         self._reader_thread.start()
 
     def _stop_reader(self, timeout_ms: int = 1000) -> bool:
@@ -191,9 +196,22 @@ class SerialHandler(TransportHandler):
         self._reader_thread = None
         return True
 
-    def _on_reader_error(self, message: str) -> None:
-        self.close(reason=DisconnectReason.IO_ERROR)
+    def _on_reader_data(self, reader: object, data: bytes) -> None:
+        if reader is self._reader_thread and self._state is TransportState.CONNECTED:
+            self.data_received.emit(data)
+
+    def _on_reader_error(
+        self, reader_or_message: object, message: str | None = None
+    ) -> None:
+        if message is None:
+            reader = self._reader_thread
+            message = str(reader_or_message)
+        else:
+            reader = reader_or_message
+        if reader is not self._reader_thread:
+            return
         self._emit_error(TransportOperation.READ, message)
+        self.close(reason=DisconnectReason.IO_ERROR)
 
     def close(
         self, reason: DisconnectReason = DisconnectReason.USER
@@ -218,29 +236,35 @@ class SerialHandler(TransportHandler):
         return True
 
     def shutdown(self, timeout_ms: int = 3000) -> bool:
-        if self.close():
+        if self.close(reason=DisconnectReason.SHUTDOWN):
             return True
 
         remaining_ms = max(0, timeout_ms - 1000)
         if remaining_ms == 0 or not self._stop_reader(remaining_ms):
             return False
-        return self.close()
+        return self.close(reason=DisconnectReason.SHUTDOWN)
 
-    def set_dtr(self, level: bool) -> None:
+    def set_dtr(self, level: bool) -> bool:
         """设置 DTR 引脚电平。"""
-        if self.is_open():
-            try:
-                self.serial_port.dtr = level  # type: ignore[union-attr]
-            except (OSError, serial.SerialException) as e:
-                self._emit_error(TransportOperation.CONTROL, str(e))
+        if not self.is_open():
+            return False
+        try:
+            self.serial_port.dtr = level  # type: ignore[union-attr]
+        except (OSError, serial.SerialException) as e:
+            self._emit_error(TransportOperation.CONTROL, str(e))
+            return False
+        return True
 
-    def set_rts(self, level: bool) -> None:
+    def set_rts(self, level: bool) -> bool:
         """设置 RTS 引脚电平。"""
-        if self.is_open():
-            try:
-                self.serial_port.rts = level  # type: ignore[union-attr]
-            except (OSError, serial.SerialException) as e:
-                self._emit_error(TransportOperation.CONTROL, str(e))
+        if not self.is_open():
+            return False
+        try:
+            self.serial_port.rts = level  # type: ignore[union-attr]
+        except (OSError, serial.SerialException) as e:
+            self._emit_error(TransportOperation.CONTROL, str(e))
+            return False
+        return True
 
     def write_data(self, data: bytes) -> bool:
         """写入数据到串口。

@@ -79,8 +79,8 @@ This project already includes the packaged configuration file 'serialMonitor. sp
 pyinstaller SerialMonitor.spec
 ```
 
-打包完成后，可执行程序将生成在 `dist/SerialMonitor/` 目录下。你可以直接运行该目录下的 `SerialMonitor` 文件。  
-The finished bundle appears in dist/SerialMonitor/; launch the SerialMonitor binary inside.
+打包完成后，可执行程序将生成在 `dist/SerialMonitor`。你可以直接运行该文件。
+The finished bundle is `dist/SerialMonitor`; launch that executable directly.
 
 ## 许可证 (License)
 

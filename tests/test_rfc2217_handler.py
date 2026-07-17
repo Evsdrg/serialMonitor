@@ -10,7 +10,7 @@ import serial
 import serial.rfc2217
 
 from core.rfc2217_handler import Rfc2217Handler
-from core.transport import TransportOperation
+from core.transport import TransportOperation, TransportState
 
 
 class _Rfc2217Redirector:
@@ -216,6 +216,22 @@ class TestRfc2217Handler:
         qtbot.waitUntil(lambda: rfc2217_server.serial.dtr is False, timeout=2000)
         qtbot.waitUntil(lambda: rfc2217_server.serial.rts is False, timeout=2000)
 
+    def test_peer_eof_is_reported_as_remote_disconnect(
+        self, qtbot, rfc2217_server, rfc_handler
+    ):
+        with qtbot.waitSignal(rfc_handler.connection_changed, timeout=3000):
+            assert rfc_handler.open("127.0.0.1", rfc2217_server.port, network_timeout=1)
+
+        connection = rfc2217_server.connection
+        assert connection is not None
+        connection.shutdown(socket.SHUT_RDWR)
+        connection.close()
+
+        with qtbot.waitSignal(rfc_handler.connection_changed, timeout=3000):
+            pass
+
+        assert rfc_handler.last_error_context == "remote"
+
     def test_non_rfc_server_fails_after_negotiation_timeout(
         self, qtbot, rfc_handler
     ):
@@ -330,3 +346,18 @@ class TestRfc2217Handler:
             rfc_handler._on_worker_error(worker, "write failed", "write")
 
         assert blocker.args[0].operation is TransportOperation.WRITE
+
+    def test_worker_failure_closes_write_window_and_maps_remote_eof(
+        self, qtbot, rfc_handler
+    ):
+        worker = Mock()
+        rfc_handler._worker = worker
+        rfc_handler._state = TransportState.CONNECTED
+        rfc_handler._ever_connected = True
+
+        with qtbot.waitSignal(rfc_handler.transport_error) as blocker:
+            rfc_handler._on_worker_error(worker, "peer closed", "remote")
+
+        assert blocker.args[0].reason.value == "remote"
+        assert rfc_handler.state is TransportState.CLOSING
+        assert rfc_handler.write_data(b"late data") is False

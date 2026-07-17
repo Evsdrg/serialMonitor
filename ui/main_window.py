@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Optional
@@ -226,6 +227,7 @@ class SerialMonitor(QMainWindow):
         self.quick_send_manager = QuickSendManager(self)
         self.terminal_mode: bool = False
         self._silent_disconnect_modes: set[str] = set()
+        self._closing = False
         self.current_theme: str = "dark" if is_system_dark_mode() else "light"
 
         self.ansi_parser = AnsiParser()
@@ -812,6 +814,7 @@ class SerialMonitor(QMainWindow):
         self._receive_at_line_start = True
         self._receive_pending_cr = False
         self._update_connection_mode_ui()
+        self._set_connection_controls_enabled(True)
         self.update_texts()
 
     def _capture_connection_settings(self, mode: str) -> None:
@@ -886,6 +889,10 @@ class SerialMonitor(QMainWindow):
         self.update_texts()
 
     def _on_reconnecting(self, mode: str, endpoint: str) -> None:
+        if mode == ConnectionMode.SERIAL.value and endpoint:
+            self.connection_panel.select_serial_port(endpoint)
+            self._serial_settings = replace(self._serial_settings, port=endpoint)
+            self.current_port = endpoint
         if mode == self.connection_mode and not self.terminal_mode:
             self.append_to_terminal(
                 self.t("reconnecting").format(endpoint) + "\n",
@@ -1500,6 +1507,8 @@ class SerialMonitor(QMainWindow):
     # ── 设备检测 ─────────────────────────────────────────────
 
     def check_device_connection(self) -> None:
+        if self._closing:
+            return
         if self.connection_mode == ConnectionMode.SERIAL.value:
             config = self.connection_controller.current_config()
             if isinstance(config, SerialConnectionConfig) and self.is_connected():
@@ -1634,14 +1643,23 @@ class SerialMonitor(QMainWindow):
 
     def closeEvent(self, event: Any) -> None:
         self.save_settings()
-        if not self.rfc2217_handler.shutdown():
+        self._closing = True
+        self._silent_disconnect_modes.update(
+            mode.value for mode in ConnectionMode
+        )
+        self.close_connection(silent=True)
+        if not self.rfc2217_handler.shutdown(timeout_ms=3000):
+            self._closing = False
+            self._silent_disconnect_modes.clear()
             event.ignore()
             return
-        if not self.serial_handler.shutdown():
+        if not self.serial_handler.shutdown(timeout_ms=1500):
+            self._closing = False
+            self._silent_disconnect_modes.clear()
             event.ignore()
             return
         self.device_check_timer.stop()
-        self.close_connection(silent=True)
-        self.socket_handler.shutdown()
+        self.socket_handler.shutdown(timeout_ms=1000)
         self.quick_send_manager.close()
+        self._closing = False
         event.accept()

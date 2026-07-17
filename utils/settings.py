@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import math
 from typing import Any
 
 
@@ -21,7 +22,7 @@ def _integer(
         return default
     try:
         result = int(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     if minimum is not None and result < minimum:
         return default
@@ -36,6 +37,8 @@ def _number(value: Any, default: float, *, minimum: float | None = None) -> floa
     try:
         result = float(value)
     except (TypeError, ValueError):
+        return default
+    if not math.isfinite(result):
         return default
     if minimum is not None and result < minimum:
         return default
