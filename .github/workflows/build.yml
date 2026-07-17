@@ -88,6 +88,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 libxcb-cursor0 xvfb
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -103,7 +108,15 @@ jobs:
         run: pyinstaller SerialMonitor.spec
 
       - name: Smoke test frozen executable
-        run: timeout 10s env QT_QPA_PLATFORM=offscreen ./dist/SerialMonitor || test $? -eq 124
+        run: |
+          set +e
+          timeout 10s xvfb-run -a env DEBUG=1 ./dist/SerialMonitor > smoke.log 2>&1
+          status=$?
+          cat smoke.log
+          if [ "$status" -eq 124 ] || [ "$status" -eq 143 ]; then
+            exit 0
+          fi
+          exit 1
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
