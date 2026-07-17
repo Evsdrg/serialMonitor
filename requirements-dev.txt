@@ -1,5 +1,6 @@
 PyQt6
-pyserial
+# Keep development and packaged RFC2217 behavior on the audited commit.
+pyserial @ git+https://github.com/pyserial/pyserial.git@17f8cc3480bd2762a53efed667295334ae76762a
 pyinstaller
 pyqtdarktheme
 

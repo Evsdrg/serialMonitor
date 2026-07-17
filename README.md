@@ -12,6 +12,10 @@ This project is a modular serial-terminal application that aims to give Linux us
 Main features:
 *   串口参数设置（波特率、校验位等）
 *   Serial-port parameter configuration (baud rate, parity, etc.)
+*   透明 TCP client，可连接串口服务器或网络串口桥
+*   Transparent TCP client for serial servers and network serial bridges
+*   RFC2217 client，支持远程串口参数和 DTR/RTS 控制
+*   RFC2217 client with remote serial settings and DTR/RTS control
 *   HEX / ASCII 格式的发送与接收
 *   Send and receive in HEX / ASCII formats
 *   ANSI 颜色转义序列支持（彩色日志显示）
@@ -20,6 +24,10 @@ Main features:
 *   Quick-command panel
 *   模块化设计，易于扩展
 *   Modular design for easy extension
+
+连接模式包括本地串口、Raw TCP 和 RFC2217。Raw TCP 只传输原始字节；RFC2217 会进行 Telnet 串口控制协商。RFC2217 不提供认证和加密，只应在可信局域网、VPN 或 SSH 隧道内使用。
+
+Connection modes include local serial, Raw TCP, and RFC2217. Raw TCP transfers bytes without protocol processing; RFC2217 negotiates remote serial settings over Telnet. RFC2217 provides no authentication or encryption and should only be used on trusted networks, VPNs, or SSH tunnels.
 
 ## 环境需求 (Requirements)
 

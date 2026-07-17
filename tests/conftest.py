@@ -32,6 +32,19 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config_paths(tmp_path, monkeypatch):
+    """Prevent UI cleanup from reading or writing repository config files."""
+    from utils.config_manager import ConfigManager
+
+    config_dir = tmp_path / "config"
+    monkeypatch.setattr(ConfigManager, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(ConfigManager, "_SETTINGS_FILE", config_dir / "settings.json")
+    monkeypatch.setattr(
+        ConfigManager, "_QUICK_SEND_FILE", config_dir / "quick_sends.json"
+    )
+
+
 # ── Hypothesis 配置 ───────────────────────────────────────────
 from hypothesis import HealthCheck, settings, Verbosity  # noqa: E402
 

@@ -3,6 +3,8 @@
 """
 
 import json
+import socket
+import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,6 +13,19 @@ import pytest
 from PyQt6.QtGui import QTextDocument
 from PyQt6.QtWidgets import QApplication
 
+from core.connection_controller import (
+    ConnectionMode,
+    Rfc2217ConnectionConfig,
+    SerialConnectionConfig,
+    TcpConnectionConfig,
+)
+from core.transport import (
+    DisconnectReason,
+    TransportError,
+    TransportOperation,
+    TransportState,
+    TransportTransition,
+)
 from ui.main_window import TerminalTrimManager, SerialMonitor
 
 
@@ -33,6 +48,11 @@ DEFAULT_SETTINGS = {
     "checksum_end_mode": 0,
     "dtr_state": False,
     "rts_state": False,
+    "connection_mode": "serial",
+    "socket_host": "",
+    "socket_port": "",
+    "rfc2217_timeout": 3.0,
+    "rfc2217_ignore_set_control": False,
     "terminal_mode": False,
     "trim_enabled": True,
     "max_terminal_lines": 5000,
@@ -293,6 +313,32 @@ class TestSerialMonitorLifecycle:
         monitor.closeEvent(event)
         event.accept.assert_called_once()
 
+    def test_close_event_ignores_when_rfc2217_worker_does_not_stop(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.rfc2217_handler = Mock()
+        monitor.rfc2217_handler.shutdown.return_value = False
+        event = Mock()
+
+        monitor.closeEvent(event)
+
+        event.ignore.assert_called_once()
+        event.accept.assert_not_called()
+        assert monitor.device_check_timer.isActive() is True
+
+    def test_close_event_ignores_when_serial_reader_does_not_stop(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.serial_handler = Mock()
+        monitor.serial_handler.shutdown.return_value = False
+        event = Mock()
+
+        monitor.closeEvent(event)
+
+        event.ignore.assert_called_once()
+        event.accept.assert_not_called()
+        assert monitor.device_check_timer.isActive() is True
+
 
 class TestSerialMonitorDataProcessing:
     def test_append_to_terminal_plain(self, qtbot):
@@ -407,7 +453,11 @@ class TestSerialMonitorDataProcessing:
     def test_on_serial_error_normal_mode(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
-        monitor._on_serial_error("test error")
+        monitor._on_connection_error(
+            "serial",
+            TransportError(TransportOperation.READ, "test error", "COM1"),
+            False,
+        )
         text = monitor.terminal_display.toPlainText()
         assert "test error" in text
 
@@ -415,7 +465,11 @@ class TestSerialMonitorDataProcessing:
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
         monitor.terminal_mode = True
-        monitor._on_serial_error("term error")
+        monitor._on_connection_error(
+            "serial",
+            TransportError(TransportOperation.READ, "term error", "COM1"),
+            False,
+        )
         # 终端模式下错误也由 emulator 处理
         text = monitor.terminal_display.toPlainText()
         assert "term error" not in text
@@ -535,6 +589,450 @@ class TestSerialMonitorDataProcessing:
 
 
 class TestSerialMonitorConnectionAndChecksum:
+    def test_connection_mode_defaults_to_serial(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        assert monitor.connection_mode == "serial"
+        assert monitor.port_combo.isHidden() is False
+        assert monitor.socket_host_input.isHidden() is True
+        assert monitor.socket_port_input.isHidden() is True
+
+    def test_toggle_connection_mode_shows_socket_inputs(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        monitor.toggle_connection_mode()
+
+        assert monitor.connection_mode == "tcp"
+        assert monitor.port_combo.isHidden() is True
+        assert monitor.refresh_button.isHidden() is True
+        assert monitor.socket_host_input.isHidden() is False
+        assert monitor.socket_port_input.isHidden() is False
+        assert monitor.baudrate_combo.isHidden() is True
+        assert monitor.dtr_checkbox.isHidden() is True
+
+    def test_second_mode_toggle_shows_rfc2217_controls(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        monitor.toggle_connection_mode()
+        monitor.toggle_connection_mode()
+
+        assert monitor.connection_mode == "rfc2217"
+        assert monitor.port_combo.isHidden() is True
+        assert monitor.socket_host_input.isHidden() is False
+        assert monitor.socket_port_input.isHidden() is False
+        assert monitor.baudrate_combo.isHidden() is False
+        assert monitor.parity_combo.isHidden() is False
+        assert monitor.dtr_checkbox.isHidden() is False
+        assert monitor.rfc2217_timeout_spinbox.isHidden() is False
+        assert monitor.rfc2217_ignore_control_checkbox.isHidden() is False
+
+    def test_rfc2217_is_active_handler_in_rfc_mode(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "rfc2217"
+
+        assert monitor.active_handler is monitor.rfc2217_handler
+
+    def test_connection_mode_cannot_change_while_connected(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.serial_handler = Mock()
+        monitor.serial_handler.is_open.return_value = True
+
+        monitor.toggle_connection_mode()
+
+        assert monitor.connection_mode == "serial"
+
+    def test_manual_disconnect_state_is_separate_per_mode(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.manual_disconnect = True
+
+        monitor.toggle_connection_mode()
+
+        assert monitor.connection_mode == "tcp"
+        assert monitor.manual_disconnect is False
+
+    def test_toggle_connection_cancels_pending_socket_connect(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_handler = Mock()
+        monitor.socket_handler.is_open.return_value = False
+        monitor.socket_handler.is_connecting.return_value = True
+
+        monitor.toggle_connection()
+
+        assert monitor.manual_disconnect is True
+        monitor.socket_handler.close.assert_called_once()
+        assert "已断开" not in monitor.terminal_display.toPlainText()
+
+    def test_pending_socket_cancel_reenables_connection_controls(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor._update_connection_mode_ui()
+        monitor.socket_host_input.setText("203.0.113.1")
+        monitor.socket_port_input.setText("65000")
+
+        monitor.open_socket()
+        assert monitor.connection_mode_button.isEnabled() is False
+
+        monitor.toggle_connection()
+
+        assert monitor.connection_mode_button.isEnabled() is True
+        assert monitor.socket_host_input.isEnabled() is True
+
+    def test_open_socket_success(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_handler = Mock()
+        monitor.socket_handler.is_open.return_value = False
+        monitor.socket_handler.is_connecting.return_value = False
+        monitor.socket_handler.open.return_value = True
+        monitor.socket_host_input.setText("192.0.2.20")
+        monitor.socket_port_input.setText("9000")
+
+        monitor.open_connection()
+        monitor._on_connection_state_changed(
+            "tcp",
+            TransportTransition(
+                TransportState.CONNECTING,
+                TransportState.CONNECTED,
+                "192.0.2.20:9000",
+            ),
+        )
+
+        monitor.socket_handler.open.assert_called_once_with("192.0.2.20", 9000)
+        assert monitor.current_socket_host == "192.0.2.20"
+        assert monitor.current_socket_port == 9000
+        assert "192.0.2.20:9000" in monitor.terminal_display.toPlainText()
+
+    def test_open_socket_requires_host_and_port(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_host_input.clear()
+        monitor.socket_port_input.clear()
+
+        with patch("ui.main_window.QMessageBox") as mock_message:
+            monitor.open_connection()
+
+        mock_message.warning.assert_called_once()
+
+    def test_open_rfc2217_passes_network_and_serial_configuration(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "rfc2217"
+        monitor.rfc2217_handler = Mock()
+        monitor.rfc2217_handler.is_open.return_value = False
+        monitor.rfc2217_handler.is_connecting.return_value = False
+        monitor.rfc2217_handler.open.return_value = True
+        monitor.socket_host_input.setText("192.0.2.30")
+        monitor.socket_port_input.setText("2217")
+        monitor.baudrate_combo.setCurrentText("115200")
+        monitor.parity_combo.setCurrentText("Even")
+        monitor.databits_combo.setCurrentText("8")
+        monitor.stopbits_combo.setCurrentText("1")
+        monitor.dtr_checkbox.setChecked(True)
+        monitor.rts_checkbox.setChecked(False)
+        monitor.rfc2217_timeout_spinbox.setValue(1.5)
+        monitor.rfc2217_ignore_control_checkbox.setChecked(True)
+
+        monitor.open_connection()
+
+        monitor.rfc2217_handler.open.assert_called_once_with(
+            "192.0.2.30",
+            2217,
+            baudrate="115200",
+            parity="Even",
+            databits="8",
+            stopbits="1",
+            dtr=True,
+            rts=False,
+            network_timeout=1.5,
+            ignore_set_control=True,
+        )
+        assert monitor.current_rfc2217_host == "192.0.2.30"
+        assert monitor.current_rfc2217_port == 2217
+
+    def test_rfc2217_dtr_and_rts_use_active_handler(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "rfc2217"
+        monitor.rfc2217_handler = Mock()
+        monitor.rfc2217_handler.is_open.return_value = True
+        monitor.dtr_checkbox.setChecked(True)
+        monitor.rts_checkbox.setChecked(True)
+
+        monitor.toggle_dtr()
+        monitor.toggle_rts()
+
+        monitor.rfc2217_handler.set_dtr.assert_called_with(True)
+        monitor.rfc2217_handler.set_rts.assert_called_with(True)
+
+    def test_send_data_uses_socket_handler_in_tcp_mode(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.serial_handler = Mock()
+        monitor.socket_handler = Mock()
+        monitor.socket_handler.is_open.return_value = True
+        monitor.socket_handler.write_data.return_value = True
+        monitor.send_input.setText("hello")
+
+        monitor.send_data()
+
+        monitor.socket_handler.write_data.assert_called_once_with(b"hello")
+        monitor.serial_handler.write_data.assert_not_called()
+
+    def test_terminal_key_uses_socket_handler_in_tcp_mode(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_handler = Mock()
+        monitor.socket_handler.is_open.return_value = True
+
+        monitor._on_terminal_key(b"k")
+
+        monitor.socket_handler.write_data.assert_called_once_with(b"k")
+
+    def test_rfc2217_send_is_reported_as_queued(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "rfc2217"
+        monitor.rfc2217_handler = Mock()
+        monitor.rfc2217_handler.is_open.return_value = True
+        monitor.rfc2217_handler.write_data.return_value = True
+        monitor.send_input.setText("hello")
+
+        monitor.send_data()
+
+        text = monitor.terminal_display.toPlainText()
+        assert "已入队" in text or "Queued" in text
+        assert monitor.send_input.text() == ""
+
+    def test_transport_data_ignores_inactive_serial_source(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.show_timestamp = False
+
+        monitor.connection_controller._on_data(ConnectionMode.SERIAL, b"stale serial")
+        monitor.connection_controller._on_data(ConnectionMode.TCP, b"socket data")
+
+        text = monitor.terminal_display.toPlainText()
+        assert "stale serial" not in text
+        assert "socket data" in text
+
+    def test_transport_data_ignores_inactive_rfc2217_source(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.show_timestamp = False
+
+        monitor.connection_controller._on_data(
+            ConnectionMode.RFC2217, b"stale rfc2217"
+        )
+        monitor.connection_controller._on_data(ConnectionMode.TCP, b"socket data")
+
+        text = monitor.terminal_display.toPlainText()
+        assert "stale rfc2217" not in text
+        assert "socket data" in text
+
+    def test_socket_disconnect_reports_endpoint(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.manual_disconnect = False
+
+        monitor._on_connection_state_changed(
+            "tcp",
+            TransportTransition(
+                TransportState.CONNECTING,
+                TransportState.CONNECTED,
+                "192.0.2.20:9000",
+            ),
+        )
+        monitor._on_connection_state_changed(
+            "tcp",
+            TransportTransition(
+                TransportState.CONNECTED,
+                TransportState.DISCONNECTED,
+                "192.0.2.20:9000",
+                DisconnectReason.REMOTE,
+                True,
+            ),
+        )
+
+        assert "192.0.2.20:9000" in monitor.terminal_display.toPlainText()
+
+    def test_real_closing_sequence_reports_disconnect(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        handler = monitor.socket_handler
+        handler.current_host = "192.0.2.20"
+        handler.current_port = 9000
+        handler._transition(TransportState.CONNECTING)
+        handler._transition(TransportState.CONNECTED)
+        before_close = monitor.terminal_display.toPlainText()
+
+        handler._transition(TransportState.CLOSING, DisconnectReason.USER)
+        handler._transition(TransportState.DISCONNECTED, DisconnectReason.USER)
+
+        assert monitor.terminal_display.toPlainText() != before_close
+
+    def test_cancel_before_connected_does_not_report_disconnect(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        handler = monitor.socket_handler
+        handler.current_host = "192.0.2.20"
+        handler.current_port = 9000
+        handler._transition(TransportState.CONNECTING)
+        handler._transition(TransportState.CLOSING, DisconnectReason.USER)
+        handler._transition(TransportState.DISCONNECTED, DisconnectReason.USER)
+
+        assert monitor.terminal_display.toPlainText() == ""
+
+    def test_explicit_socket_connect_error_shows_dialog(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        with patch("ui.main_window.QMessageBox") as message_box:
+            monitor._on_connection_error(
+                "tcp",
+                TransportError(
+                    TransportOperation.CONNECT,
+                    "connection refused",
+                    "127.0.0.1:9000",
+                ),
+                True,
+            )
+
+        message_box.critical.assert_called_once()
+
+    def test_connect_error_sets_backoff_before_modal_dialog(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_handler = Mock()
+        monitor.socket_handler.last_error_context = "connect"
+        monitor.socket_handler.is_open.return_value = False
+        monitor.socket_handler.is_connecting.return_value = False
+        monitor.socket_handler.open.return_value = True
+        monitor.auto_reconnect = True
+        monitor.current_socket_host = "127.0.0.1"
+        monitor.current_socket_port = 9000
+        monitor.connection_controller.connect(
+            TcpConnectionConfig("127.0.0.1", 9000), interactive=True
+        )
+
+        with patch("ui.main_window.QMessageBox") as message_box:
+            message_box.critical.side_effect = (
+                lambda *_args: monitor.check_device_connection()
+            )
+            monitor.connection_controller._on_error(
+                ConnectionMode.TCP,
+                TransportError(
+                    TransportOperation.CONNECT,
+                    "connection refused",
+                    "127.0.0.1:9000",
+                    DisconnectReason.CONNECT_FAILED,
+                ),
+            )
+
+        monitor.socket_handler.open.assert_called_once()
+        assert monitor._next_socket_reconnect_at > time.monotonic()
+
+    def test_background_socket_connect_error_is_logged(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_handler = Mock()
+        monitor.current_socket_host = "127.0.0.1"
+        monitor.current_socket_port = 9000
+
+        with patch("ui.main_window.QMessageBox") as message_box:
+            monitor._on_connection_error(
+                "tcp",
+                TransportError(
+                    TransportOperation.CONNECT,
+                    "connection refused",
+                    "127.0.0.1:9000",
+                ),
+                False,
+            )
+
+        message_box.critical.assert_not_called()
+        assert "127.0.0.1:9000" in monitor.terminal_display.toPlainText()
+
+    def test_network_error_is_visible_in_terminal_mode(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.terminal_mode = True
+
+        monitor._on_connection_error(
+            "tcp",
+            TransportError(
+                TransportOperation.READ,
+                "connection reset",
+                "127.0.0.1:9000",
+            ),
+            False,
+        )
+
+        qtbot.waitUntil(
+            lambda: "connection reset" in monitor.terminal_emulator.toPlainText()
+        )
+
+    def test_failed_socket_connection_unlocks_ui_and_sets_backoff(self, qtbot):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor._update_connection_mode_ui()
+        monitor.socket_host_input.setText("127.0.0.1")
+        monitor.socket_port_input.setText(str(port))
+
+        monitor.open_socket(show_error=False)
+        qtbot.waitUntil(
+            lambda: not monitor.socket_handler.is_connecting(), timeout=2000
+        )
+        qtbot.waitUntil(
+            lambda: monitor.connection_mode_button.isEnabled(), timeout=2000
+        )
+
+        assert monitor.is_connected() is False
+        assert monitor._next_socket_reconnect_at > time.monotonic()
+        assert f"127.0.0.1:{port}" in monitor.terminal_display.toPlainText()
+
+    def test_remote_close_error_does_not_duplicate_disconnect_message(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor._on_connection_error(
+            "tcp",
+            TransportError(
+                TransportOperation.READ,
+                "remote host closed",
+                "127.0.0.1:9000",
+                DisconnectReason.REMOTE,
+            ),
+            False,
+        )
+
+        assert monitor.terminal_display.toPlainText() == ""
+
     def test_toggle_ansi_colors(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
@@ -549,6 +1047,171 @@ class TestSerialMonitorConnectionAndChecksum:
         monitor.auto_reconnect_checkbox.setChecked(True)
         monitor.toggle_auto_reconnect()
         assert monitor.auto_reconnect is True
+
+    def test_socket_auto_reconnect_uses_saved_endpoint(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_handler = Mock()
+        monitor.socket_handler.is_open.return_value = False
+        monitor.socket_handler.is_connecting.return_value = False
+        monitor.socket_handler.open.return_value = True
+        monitor.auto_reconnect = True
+        monitor.manual_disconnect = False
+        monitor.current_socket_host = "127.0.0.1"
+        monitor.current_socket_port = 9000
+        monitor.socket_host_input.setText("127.0.0.1")
+        monitor.socket_port_input.setText("9000")
+        monitor.connection_controller.connect(
+            TcpConnectionConfig("127.0.0.1", 9000), interactive=False
+        )
+        monitor.socket_handler.open.reset_mock()
+
+        monitor.check_device_connection()
+
+        monitor.socket_handler.open.assert_called_once_with("127.0.0.1", 9000)
+
+    def test_rfc2217_auto_reconnect_uses_saved_endpoint(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "rfc2217"
+        monitor.rfc2217_handler = Mock()
+        monitor.rfc2217_handler.is_open.return_value = False
+        monitor.rfc2217_handler.is_connecting.return_value = False
+        monitor.rfc2217_handler.open.return_value = True
+        monitor.auto_reconnect = True
+        monitor.manual_disconnect = False
+        monitor.current_rfc2217_host = "127.0.0.1"
+        monitor.current_rfc2217_port = 2217
+        monitor.socket_host_input.setText("127.0.0.1")
+        monitor.socket_port_input.setText("2217")
+        monitor.connection_controller.connect(
+            Rfc2217ConnectionConfig("127.0.0.1", 2217), interactive=False
+        )
+        monitor.rfc2217_handler.open.reset_mock()
+
+        monitor.check_device_connection()
+
+        monitor.rfc2217_handler.open.assert_called_once()
+
+    def test_background_rfc2217_connect_error_is_logged(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "rfc2217"
+        monitor.current_rfc2217_host = "127.0.0.1"
+        monitor.current_rfc2217_port = 2217
+
+        with patch("ui.main_window.QMessageBox") as message_box:
+            monitor._on_connection_error(
+                "rfc2217",
+                TransportError(
+                    TransportOperation.CONNECT,
+                    "negotiation timeout",
+                    "127.0.0.1:2217",
+                ),
+                False,
+            )
+
+        message_box.critical.assert_not_called()
+        assert "127.0.0.1:2217" in monitor.terminal_display.toPlainText()
+
+    def test_load_settings_restores_socket_mode(self, qtbot):
+        settings = dict(DEFAULT_SETTINGS)
+        settings.update(
+            connection_mode="tcp",
+            socket_host="192.0.2.30",
+            socket_port="7000",
+        )
+
+        with patch(
+            "ui.main_window.ConfigManager.load_settings", return_value=settings
+        ):
+            monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        assert monitor.connection_mode == "tcp"
+        assert monitor.socket_host_input.text() == "192.0.2.30"
+        assert monitor.socket_port_input.text() == "7000"
+        assert monitor.socket_host_input.isHidden() is False
+        assert monitor.port_combo.isHidden() is True
+
+    def test_save_settings_includes_socket_endpoint(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "tcp"
+        monitor.socket_host_input.setText("192.0.2.40")
+        monitor.socket_port_input.setText("8000")
+
+        with patch("ui.main_window.ConfigManager.save_settings") as save_settings:
+            monitor.save_settings()
+
+        saved = save_settings.call_args.args[0]
+        assert saved["schema_version"] == 2
+        assert saved["connection_mode"] == "tcp"
+        assert saved["connections"]["tcp"] == {
+            "host": "192.0.2.40",
+            "port": 8000,
+        }
+
+    def test_load_rfc2217_settings(self, qtbot):
+        settings = dict(DEFAULT_SETTINGS)
+        settings.update(
+            connection_mode="rfc2217",
+            socket_host="192.0.2.50",
+            socket_port="2217",
+            rfc2217_timeout=2.5,
+            rfc2217_ignore_set_control=True,
+        )
+
+        with patch(
+            "ui.main_window.ConfigManager.load_settings", return_value=settings
+        ):
+            monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        assert monitor.connection_mode == "rfc2217"
+        assert monitor.rfc2217_timeout_spinbox.value() == 2.5
+        assert monitor.rfc2217_ignore_control_checkbox.isChecked() is True
+        assert monitor.baudrate_combo.isHidden() is False
+        assert monitor.socket_host_input.isHidden() is False
+
+    def test_save_settings_includes_rfc2217_options(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = "rfc2217"
+        monitor.rfc2217_timeout_spinbox.setValue(1.5)
+        monitor.rfc2217_ignore_control_checkbox.setChecked(True)
+
+        with patch("ui.main_window.ConfigManager.save_settings") as save_settings:
+            monitor.save_settings()
+
+        saved = save_settings.call_args.args[0]
+        assert saved["connection_mode"] == "rfc2217"
+        assert saved["connections"]["rfc2217"]["network_timeout"] == 1.5
+        assert saved["connections"]["rfc2217"]["ignore_set_control"] is True
+
+    def test_tcp_and_rfc2217_controls_keep_independent_values(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        monitor.toggle_connection_mode()
+        monitor.socket_host_input.setText("tcp.example")
+        monitor.socket_port_input.setText("9000")
+
+        monitor.toggle_connection_mode()
+        monitor.socket_host_input.setText("rfc.example")
+        monitor.socket_port_input.setText("2217")
+        monitor.baudrate_combo.setCurrentText("38400")
+
+        monitor.toggle_connection_mode()
+        monitor.toggle_connection_mode()
+        assert monitor.socket_host_input.text() == "tcp.example"
+        assert monitor.socket_port_input.text() == "9000"
+
+        monitor.toggle_connection_mode()
+        assert monitor.socket_host_input.text() == "rfc.example"
+        assert monitor.socket_port_input.text() == "2217"
+        assert monitor.baudrate_combo.currentText() == "38400"
 
     def test_refresh_ports(self, qtbot):
         monitor = SerialMonitor()
@@ -579,6 +1242,14 @@ class TestSerialMonitorConnectionAndChecksum:
         monitor.port_combo.setCurrentIndex(0)
 
         monitor.open_serial()
+        monitor._on_connection_state_changed(
+            "serial",
+            TransportTransition(
+                TransportState.CONNECTING,
+                TransportState.CONNECTED,
+                "/dev/ttyUSB0",
+            ),
+        )
         monitor.serial_handler.open.assert_called_once()
         assert monitor.current_port == "/dev/ttyUSB0"
         assert monitor.manual_disconnect is False
@@ -596,6 +1267,15 @@ class TestSerialMonitorConnectionAndChecksum:
 
         with patch("ui.main_window.QMessageBox") as MockMsg:
             monitor.open_serial()
+            monitor.connection_controller._on_error(
+                ConnectionMode.SERIAL,
+                TransportError(
+                    TransportOperation.CONNECT,
+                    "permission denied",
+                    "/dev/ttyUSB0",
+                    DisconnectReason.CONNECT_FAILED,
+                ),
+            )
             MockMsg.critical.assert_called()
 
     def test_open_serial_already_open(self, qtbot):
@@ -627,7 +1307,21 @@ class TestSerialMonitorConnectionAndChecksum:
         qtbot.addWidget(monitor)
         monitor.serial_handler = Mock()
         monitor.serial_handler.is_open.return_value = True
+        monitor.current_port = "/dev/ttyUSB0"
+        monitor.connection_controller.remember_config(
+            SerialConnectionConfig("/dev/ttyUSB0")
+        )
         monitor.close_serial(silent=False, device_lost=True)
+        monitor._on_connection_state_changed(
+            "serial",
+            TransportTransition(
+                TransportState.CONNECTED,
+                TransportState.DISCONNECTED,
+                "/dev/ttyUSB0",
+                DisconnectReason.DEVICE_REMOVED,
+                True,
+            ),
+        )
         monitor.serial_handler.close.assert_called_once()
         text = monitor.terminal_display.toPlainText()
         assert text != ""
@@ -703,6 +1397,9 @@ class TestSerialMonitorConnectionAndChecksum:
         monitor.serial_handler = Mock()
         monitor.serial_handler.is_open.return_value = True
         monitor.current_port = "/dev/ttyUSB0"
+        monitor.connection_controller.remember_config(
+            SerialConnectionConfig("/dev/ttyUSB0")
+        )
         with patch.object(monitor.serial_handler, "get_available_ports",
                           return_value=[]):
             monitor.check_device_connection()
@@ -719,6 +1416,10 @@ class TestSerialMonitorConnectionAndChecksum:
         monitor.current_port = "/dev/ttyUSB0"
         monitor.port_combo.addItem("/dev/ttyUSB0")
         monitor.port_combo.setCurrentIndex(0)
+        monitor.connection_controller.connect(
+            SerialConnectionConfig("/dev/ttyUSB0"), interactive=False
+        )
+        monitor.serial_handler.open.reset_mock()
 
         with patch.object(monitor.serial_handler, "get_available_ports",
                           return_value=["/dev/ttyUSB0"]):
@@ -893,6 +1594,10 @@ class TestSerialMonitorCheckDeviceMore:
         monitor.current_port = "/dev/ttyUSB0"
         monitor.port_combo.addItem("/dev/ttyUSB0")
         monitor.terminal_mode = True
+        monitor.connection_controller.connect(
+            SerialConnectionConfig("/dev/ttyUSB0"), interactive=False
+        )
+        monitor.serial_handler.open.reset_mock()
 
         with patch.object(monitor.serial_handler, "get_available_ports",
                           return_value=["/dev/ttyUSB0"]):
@@ -927,7 +1632,30 @@ class TestSerialMonitorCheckDeviceMore:
         with patch.object(monitor.serial_handler, "get_available_ports",
                           return_value=["/dev/ttyUSB0"]):
             monitor.check_device_connection()
-        monitor.serial_handler.open.assert_called_once()
+        monitor.serial_handler.open.assert_not_called()
+        assert monitor.current_port is None
+
+    def test_serial_reconnect_does_not_select_a_different_port(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.serial_handler = Mock()
+        monitor.serial_handler.is_open.return_value = False
+        monitor.auto_reconnect = True
+        monitor.manual_disconnect = False
+        monitor.current_port = "/dev/ttyUSB0"
+        monitor.connection_controller.connect(
+            SerialConnectionConfig("/dev/ttyUSB0"), interactive=False
+        )
+        monitor.serial_handler.open.reset_mock()
+
+        with patch.object(
+            monitor.serial_handler,
+            "get_available_ports",
+            return_value=["/dev/ttyUSB1"],
+        ):
+            monitor.check_device_connection()
+
+        monitor.serial_handler.open.assert_not_called()
         assert monitor.current_port == "/dev/ttyUSB0"
 
     def test_check_device_manual_disconnect_no_reconnect(self, qtbot):
@@ -938,6 +1666,9 @@ class TestSerialMonitorCheckDeviceMore:
         monitor.auto_reconnect = True
         monitor.manual_disconnect = True
         monitor.current_port = "/dev/ttyUSB0"
+        monitor.connection_controller.remember_config(
+            SerialConnectionConfig("/dev/ttyUSB0")
+        )
 
         with patch.object(monitor.serial_handler, "get_available_ports",
                           return_value=["/dev/ttyUSB0"]):

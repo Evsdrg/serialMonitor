@@ -3,9 +3,10 @@
 """
 
 import pytest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 from core.serial_handler import SerialHandler
+from core.transport import TransportState
 
 
 class TestSerialHandlerStatic:
@@ -105,6 +106,7 @@ class TestSerialHandlerInstance:
         handler = SerialHandler()
         handler.serial_port = Mock()
         handler.serial_port.is_open = True
+        handler._state = TransportState.CONNECTED
         assert handler.open("/dev/ttyUSB0") is True
 
     @patch("core.serial_handler.SerialHandler._start_reader")
@@ -122,6 +124,7 @@ class TestSerialHandlerInstance:
         assert handler.current_port == "/dev/ttyUSB0"
         assert handler.is_open() is True
         mock_serial_class.assert_called_once()
+        assert mock_serial_class.call_args.kwargs["write_timeout"] == 1.0
 
     def test_open_failure_emits_error(self, qtbot):
         import serial
@@ -158,6 +161,46 @@ class TestSerialHandlerInstance:
         call_kwargs = mock_serial_class.call_args.kwargs
         assert call_kwargs["parity"] == "E"
         assert call_kwargs["stopbits"] == 1.5
+
+    @patch("core.serial_handler.SerialHandler._start_reader")
+    def test_open_applies_control_lines_before_open(self, mock_start_reader):
+        events = []
+
+        class FakePort:
+            def __init__(self):
+                self.is_open = False
+                self._dtr = True
+                self._rts = True
+
+            @property
+            def dtr(self):
+                return self._dtr
+
+            @dtr.setter
+            def dtr(self, value):
+                self._dtr = value
+                events.append(("dtr", value))
+
+            @property
+            def rts(self):
+                return self._rts
+
+            @rts.setter
+            def rts(self, value):
+                self._rts = value
+                events.append(("rts", value))
+
+            def open(self):
+                events.append(("open", None))
+                self.is_open = True
+
+        fake_port = FakePort()
+        handler = SerialHandler()
+
+        with patch("core.serial_handler.serial.Serial", return_value=fake_port):
+            assert handler.open("/dev/ttyUSB0", dtr=False, rts=False)
+
+        assert events == [("dtr", False), ("rts", False), ("open", None)]
 
     @patch("core.serial_handler.SerialHandler._start_reader")
     @patch("core.serial_handler.serial.Serial")
@@ -205,12 +248,27 @@ class TestSerialHandlerInstance:
         handler = SerialHandler()
         mock_port = Mock()
         mock_port.is_open = True
+        mock_port.write.return_value = 5
         mock_serial_class.return_value = mock_port
 
         handler.open("/dev/ttyUSB0")
         result = handler.write_data(b"hello")
         assert result is True
         mock_port.write.assert_called_once_with(b"hello")
+
+    def test_write_data_rejects_partial_write(self, qtbot):
+        handler = SerialHandler()
+        mock_port = Mock()
+        mock_port.is_open = True
+        mock_port.write.return_value = 2
+        handler.serial_port = mock_port
+        handler._state = TransportState.CONNECTED
+
+        with qtbot.waitSignal(handler.error_occurred, timeout=1000) as blocker:
+            result = handler.write_data(b"hello")
+
+        assert result is False
+        assert "2 of 5" in blocker.args[0]
 
     def test_write_data_when_closed(self):
         handler = SerialHandler()
@@ -498,8 +556,40 @@ class TestSerialHandlerClosePath:
 
         handler._stop_reader()
         mock_thread.stop.assert_called_once()
-        mock_thread.wait.assert_called_once_with(500)
+        mock_thread.wait.assert_called_once_with(1000)
         assert handler._reader_thread is None
+
+    def test_close_keeps_reader_reference_when_thread_does_not_stop(self):
+        handler = SerialHandler()
+        mock_port = Mock()
+        mock_port.is_open = True
+        mock_thread = Mock()
+        mock_thread.wait.return_value = False
+        handler.serial_port = mock_port
+        handler._reader_thread = mock_thread
+
+        assert handler.close() is False
+
+        assert handler._reader_thread is mock_thread
+        assert handler.serial_port is mock_port
+        mock_port.close.assert_not_called()
+
+    def test_shutdown_retries_reader_before_closing_port(self):
+        handler = SerialHandler()
+        mock_port = Mock()
+        mock_port.is_open = True
+        mock_thread = Mock()
+        mock_thread.wait.side_effect = [False, True]
+        handler.serial_port = mock_port
+        handler.current_port = "/dev/ttyUSB0"
+        handler._reader_thread = mock_thread
+
+        assert handler.shutdown(timeout_ms=3000) is True
+
+        assert mock_thread.wait.call_args_list == [call(1000), call(2000)]
+        mock_port.close.assert_called_once()
+        assert handler._reader_thread is None
+        assert handler.serial_port is None
 
     def test_on_reader_error_closes_and_emits(self, qtbot):
         handler = SerialHandler()
@@ -528,6 +618,7 @@ class TestSerialHandlerClosePath:
         mock_port.is_open = True
         type(mock_port).dtr = Mock(side_effect=OSError("bus error"))
         handler.serial_port = mock_port
+        handler._state = TransportState.CONNECTED
 
         handler.set_dtr(True)  # 异常被捕获
 
@@ -537,6 +628,7 @@ class TestSerialHandlerClosePath:
         mock_port.is_open = True
         type(mock_port).rts = Mock(side_effect=OSError("bus error"))
         handler.serial_port = mock_port
+        handler._state = TransportState.CONNECTED
 
         handler.set_rts(True)  # 异常被捕获
 
@@ -548,6 +640,7 @@ class TestSerialHandlerClosePath:
         mock_port.write.side_effect = serial.SerialException("write failed")
         handler.serial_port = mock_port
         handler.current_port = "/dev/ttyUSB0"
+        handler._state = TransportState.CONNECTED
 
         with qtbot.waitSignal(handler.error_occurred, timeout=1000) as blocker:
             result = handler.write_data(b"data")
