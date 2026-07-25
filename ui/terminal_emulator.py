@@ -302,7 +302,20 @@ class TerminalEmulator(QTextEdit):
                     i = end
                     continue
                 elif i + 1 < length:
-                    # 非 CSI 的 ESC 序列，跳过两个字符
+                    nxt = text[i + 1]
+                    if nxt == "c":
+                        self._reset()
+                    elif nxt == "7":
+                        self._saved_row = self.cursor_row
+                        self._saved_col = self.cursor_col
+                    elif nxt == "8":
+                        self.cursor_row = self._saved_row
+                        self.cursor_col = self._saved_col
+                        self._wrap_pending = False
+                        self._dirty = True
+                    elif nxt == "M":
+                        self._reverse_index()
+                    # 其他两字符 ESC 序列忽略
                     i += 2
                     continue
                 else:
@@ -393,6 +406,28 @@ class TerminalEmulator(QTextEdit):
             self.grid.pop(0)
             self.grid.append([_Cell() for _ in range(self.cols)])
             self.cursor_row = self.rows - 1
+
+    def _reset(self) -> None:
+        """RIS（ESC c）：完整复位终端状态。"""
+        self.grid = [[_Cell() for _ in range(self.cols)] for _ in range(self.rows)]
+        self.cursor_row = 0
+        self.cursor_col = 0
+        self._saved_row = 0
+        self._saved_col = 0
+        self._wrap_pending = False
+        self._ansi_parser.reset_format()
+        self._dirty = True
+        self._schedule_render()
+
+    def _reverse_index(self) -> None:
+        """RI（ESC M）：光标上移一行，到顶则内容下滚。"""
+        if self.cursor_row == 0:
+            self.grid.pop()
+            self.grid.insert(0, [_Cell() for _ in range(self.cols)])
+        else:
+            self.cursor_row -= 1
+        self._wrap_pending = False
+        self._dirty = True
 
     def _handle_private_mode(self, mode: str, enable: bool) -> None:
         """处理私有模式设置（\033[?nh/l），当前支持 DECTCEM（25）。"""

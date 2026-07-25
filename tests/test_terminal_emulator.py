@@ -541,6 +541,64 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestEscSequences:
+    def test_esc_c_full_reset(self, qtbot):
+        term = TerminalEmulator(rows=3, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[31mAB")
+
+        term.process_bytes(b"\x1bc")
+
+        assert term.cursor_row == 0
+        assert term.cursor_col == 0
+        assert term.grid[0][0].char == " "
+        assert term._ansi_parser.current_format.hasProperty(
+            0x0BC1  # QTextFormat.Property.ForegroundBrush
+        ) is False
+
+    def test_esc_7_8_save_restore_cursor(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=10)
+        qtbot.addWidget(term)
+        term.process_bytes(b"ABCD\x1b7XY")
+
+        assert term.cursor_col == 6
+
+        term.process_bytes(b"\x1b8Z")
+
+        assert term.cursor_col == 5
+        assert term.grid[0][4].char == "Z"
+
+    def test_esc_m_reverse_index_moves_up(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=10)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[3;1H")
+
+        term.process_bytes(b"\x1bM")
+
+        assert term.cursor_row == 1
+
+    def test_esc_m_at_top_scrolls_down(self, qtbot):
+        term = TerminalEmulator(rows=3, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"A\r\nB")
+
+        term.process_bytes(b"\x1b[1;1H\x1bM")
+
+        assert term.grid[0][0].char == " "
+        assert term.grid[1][0].char == "A"
+        assert term.grid[2][0].char == "B"
+
+    def test_unknown_two_char_esc_still_skipped(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+
+        # ESC+Z 消费两字符，其余字节继续正常处理
+        term.process_bytes(b"\x1bZZ")
+
+        assert term.grid[0][0].char == "Z"
+        assert term.cursor_col == 1
+
+
 class TestEscapeBufferLimit:
     def test_unterminated_osc_buffer_is_capped(self, qtbot):
         term = TerminalEmulator(rows=2, cols=5)
