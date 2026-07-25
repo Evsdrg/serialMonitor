@@ -462,6 +462,28 @@ class TestSerialMonitorDataProcessing:
 
         assert "3" in monitor.statusBar().currentMessage()
 
+    def test_error_after_partial_line_restores_line_start(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor._on_serial_data(b"partial")
+        assert monitor._receive_at_line_start is False
+
+        monitor._append_transport_error("ERR1")
+
+        assert monitor._receive_at_line_start is True
+
+    def test_error_flushes_pending_cr_before_message(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.show_timestamp = False
+
+        monitor._on_serial_data(b"AAA\r")
+        monitor._append_transport_error("ERR2")
+        monitor._on_serial_data(b"BBB")
+
+        text = monitor.terminal_display.toPlainText()
+        assert text == "AAA\nERR2\nBBB"
+
     def test_send_payload_terminal_mode_uses_statusbar(self, qtbot):
         from core.payload_sender import SendResult, SendStatus
         from core.payload_sender import PayloadRequest

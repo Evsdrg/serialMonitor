@@ -1348,7 +1348,15 @@ class SerialMonitor(QMainWindow):
             self.terminal_emulator.process_bytes(
                 (message + "\r\n").encode("utf-8", errors="replace")
             )
+        # 错误插到数据流中间时，先冲刷数据流持有的行尾 CR，保持行序
+        if self._receive_pending_cr:
+            self._receive_pending_cr = False
+            self.append_to_terminal(
+                "\r", with_timestamp=self._receive_at_line_start
+            )
         self.append_to_terminal(message + "\n", with_timestamp=True)
+        # 错误消息以换行结尾，后续接收数据应从带时间戳的新行开始
+        self._receive_at_line_start = True
 
     def _on_connection_error(
         self, mode: str, error: TransportError, interactive: bool

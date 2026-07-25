@@ -2,7 +2,7 @@
 测试 core/ansi_parser.py
 """
 
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QTextFormat
 
 import pytest
 from PyQt6.QtCore import Qt
@@ -246,3 +246,24 @@ class TestAnsiParserExtendedColors:
         segments = parser.parse_text("\x1b[38;5;196mred")
         assert segments[-1][0] == "red"
         assert segments[-1][1].foreground().color() == QColor(255, 0, 0)
+
+
+class TestExtendedColorEdgeCases:
+    def test_truecolor_components_clamped(self):
+        parser = AnsiParser()
+        parser.parse_code("38;2;999;-5;0m")
+        fmt = parser.current_format
+        assert fmt.foreground().color() == QColor(255, 0, 0)
+
+    def test_truncated_truecolor_sequence_ignored(self):
+        parser = AnsiParser()
+        parser.parse_code("38;2;30;40m")
+        fmt = parser.current_format
+        assert not fmt.hasProperty(QTextFormat.Property.ForegroundBrush)
+        assert not fmt.hasProperty(QTextFormat.Property.BackgroundBrush)
+
+    def test_truncated_256_sequence_ignored(self):
+        parser = AnsiParser()
+        parser.parse_code("38;5m")
+        fmt = parser.current_format
+        assert not fmt.hasProperty(QTextFormat.Property.ForegroundBrush)

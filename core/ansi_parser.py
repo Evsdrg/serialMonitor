@@ -112,7 +112,9 @@ class AnsiParser:
             if c in ("38", "48") and i < len(codes):
                 is_fg = c == "38"
                 mode = codes[i]
-                if mode == "5" and i + 1 < len(codes):
+                if mode == "5":
+                    if i + 1 >= len(codes):
+                        break
                     try:
                         color = self._xterm_256_color(int(codes[i + 1]))
                     except ValueError:
@@ -124,12 +126,14 @@ class AnsiParser:
                             self.current_format.setBackground(color)
                     i += 2
                     continue
-                if mode == "2" and i + 3 < len(codes):
+                if mode == "2":
+                    if i + 3 >= len(codes):
+                        break
                     try:
                         r, g, b = (
-                            int(codes[i + 1]),
-                            int(codes[i + 2]),
-                            int(codes[i + 3]),
+                            max(0, min(255, int(codes[i + 1]))),
+                            max(0, min(255, int(codes[i + 2]))),
+                            max(0, min(255, int(codes[i + 3]))),
                         )
                     except ValueError:
                         i += 4

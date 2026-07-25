@@ -412,6 +412,78 @@ class TestPasteConfirmation:
         assert warnings == [1]
 
 
+class TestAuditFixes:
+    def test_tab_beyond_last_stop_does_not_hang(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=1)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\t")
+
+        assert term.cursor_col == 0
+
+    def test_tab_near_right_margin_completes(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=80)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"x" * 72 + b"\t")
+
+        assert term.cursor_col == 79
+
+    def test_reverse_index_clamps_at_top(self, qtbot):
+        term = TerminalEmulator(rows=10, cols=10)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b[3;6r\x1bM\x1bM")
+
+        assert term.cursor_row == 0
+
+        term.process_bytes(b"X")
+        assert term.grid[0][0].char == "X"
+
+    def test_resize_clamps_saved_cursor(self, qtbot):
+        term = TerminalEmulator(rows=24, cols=80)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b[20;1H\x1b7")
+        term.resize_grid(10, 80)
+        term.process_bytes(b"\x1b8X")
+
+        assert 0 <= term.cursor_row < term.rows
+        assert term.grid[term.cursor_row][0].char == "X"
+
+    def test_resize_clamps_saved_cursor_columns(self, qtbot):
+        term = TerminalEmulator(rows=10, cols=10)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b[1;10H\x1b7")
+        term.resize_grid(5, 4)
+        term.process_bytes(b"\x1b8X")
+
+        assert term.grid[0][3].char == "X"
+        assert 0 <= term.cursor_col < term.cols
+
+    def test_set_dimensions_resets_scroll_region(self, qtbot):
+        term = TerminalEmulator(rows=10, cols=20)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b[1;10r")
+        term.set_dimensions(5, 20)
+
+        assert term._scroll_top == 0
+        assert term._scroll_bottom == 4
+
+        term.process_bytes(b"\x1b[H\x1bMX")
+        assert term.grid[0][0].char == "X"
+
+    def test_ris_restores_cursor_visibility(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=10)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b[?25l\x1bc")
+
+        assert term._cursor_visible is True
+
+
 class TestTerminalEmulatorSearch:
     def test_search_highlight(self, qtbot):
         term = TerminalEmulator(rows=3, cols=20)

@@ -180,6 +180,10 @@ class TerminalEmulator(QTextEdit):
         """调整终端行列数。"""
         self.rows = rows
         self.cols = cols
+        self._saved_row = max(0, min(self._saved_row, rows - 1))
+        self._saved_col = max(0, min(self._saved_col, cols - 1))
+        self._scroll_top = 0
+        self._scroll_bottom = rows - 1
         self.clear_screen()
 
     def resize_grid(self, rows: int, cols: int) -> None:
@@ -209,6 +213,8 @@ class TerminalEmulator(QTextEdit):
         self.cols = cols
         self.cursor_row = max(0, min(self.cursor_row, rows - 1))
         self.cursor_col = max(0, min(self.cursor_col, cols - 1))
+        self._saved_row = max(0, min(self._saved_row, rows - 1))
+        self._saved_col = max(0, min(self._saved_col, cols - 1))
         self._wrap_pending = False
         self._scroll_top = 0
         self._scroll_bottom = rows - 1
@@ -416,7 +422,8 @@ class TerminalEmulator(QTextEdit):
             # ── 制表符 ──
             elif ch == "\t":
                 next_stop = ((self.cursor_col // 8) + 1) * 8
-                while self.cursor_col < min(next_stop, self.cols):
+                stop = min(next_stop, self.cols - 1)
+                while self.cursor_col < stop:
                     self._put_char(" ")
                 i += 1
                 self._dirty = True
@@ -497,6 +504,7 @@ class TerminalEmulator(QTextEdit):
         self._scroll_top = 0
         self._scroll_bottom = self.rows - 1
         self._dec_graphics = False
+        self._cursor_visible = True
         self._ansi_parser.reset_format()
         self._dirty = True
         self._schedule_render()
@@ -507,7 +515,7 @@ class TerminalEmulator(QTextEdit):
             blank = [_Cell() for _ in range(self.cols)]
             self.grid.pop(self._scroll_bottom)
             self.grid.insert(self._scroll_top, blank)
-        else:
+        elif self.cursor_row > 0:
             self.cursor_row -= 1
         self._wrap_pending = False
         self._dirty = True
