@@ -79,6 +79,8 @@ class TerminalEmulator(QTextEdit):
         self.cursor_row: int = 0
         self.cursor_col: int = 0
         self._wrap_pending: bool = False
+        self._scroll_top: int = 0
+        self._scroll_bottom: int = rows - 1
 
         # 光标保存/恢复
         self._saved_row: int = 0
@@ -169,6 +171,8 @@ class TerminalEmulator(QTextEdit):
         self.cursor_row = max(0, min(self.cursor_row, rows - 1))
         self.cursor_col = max(0, min(self.cursor_col, cols - 1))
         self._wrap_pending = False
+        self._scroll_top = 0
+        self._scroll_bottom = rows - 1
         self._dirty = True
         self._schedule_render()
 
@@ -400,12 +404,13 @@ class TerminalEmulator(QTextEdit):
             self.cursor_col += 1
 
     def _newline(self) -> None:
-        """光标下移一行，必要时滚屏。"""
-        self.cursor_row += 1
-        if self.cursor_row >= self.rows:
-            self.grid.pop(0)
-            self.grid.append([_Cell() for _ in range(self.cols)])
-            self.cursor_row = self.rows - 1
+        """光标下移一行，到达滚动区域底部则区域内滚屏。"""
+        if self.cursor_row == self._scroll_bottom:
+            blank = [_Cell() for _ in range(self.cols)]
+            self.grid.pop(self._scroll_top)
+            self.grid.insert(self._scroll_bottom, blank)
+        elif self.cursor_row < self.rows - 1:
+            self.cursor_row += 1
 
     def _reset(self) -> None:
         """RIS（ESC c）：完整复位终端状态。"""
@@ -415,15 +420,18 @@ class TerminalEmulator(QTextEdit):
         self._saved_row = 0
         self._saved_col = 0
         self._wrap_pending = False
+        self._scroll_top = 0
+        self._scroll_bottom = self.rows - 1
         self._ansi_parser.reset_format()
         self._dirty = True
         self._schedule_render()
 
     def _reverse_index(self) -> None:
-        """RI（ESC M）：光标上移一行，到顶则内容下滚。"""
-        if self.cursor_row == 0:
-            self.grid.pop()
-            self.grid.insert(0, [_Cell() for _ in range(self.cols)])
+        """RI（ESC M）：光标上移一行，到达滚动区域顶部则区域内下滚。"""
+        if self.cursor_row == self._scroll_top:
+            blank = [_Cell() for _ in range(self.cols)]
+            self.grid.pop(self._scroll_bottom)
+            self.grid.insert(self._scroll_top, blank)
         else:
             self.cursor_row -= 1
         self._wrap_pending = False
@@ -492,6 +500,16 @@ class TerminalEmulator(QTextEdit):
             self.cursor_col = min(col, self.cols - 1)
             self._wrap_pending = False
             self._dirty = True
+        elif final == "r":
+            top = params[0] if params and params[0] else 1
+            bottom = params[1] if len(params) > 1 and params[1] else self.rows
+            if 1 <= top < bottom <= self.rows:
+                self._scroll_top = top - 1
+                self._scroll_bottom = bottom - 1
+                self.cursor_row = 0
+                self.cursor_col = 0
+                self._wrap_pending = False
+                self._dirty = True
         elif final == "s":
             self._saved_row = self.cursor_row
             self._saved_col = self.cursor_col

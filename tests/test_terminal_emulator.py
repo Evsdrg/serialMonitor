@@ -541,6 +541,78 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestScrollRegion:
+    def test_set_region_moves_cursor_home(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"AB")
+
+        term.process_bytes(b"\x1b[2;4r")
+
+        assert term._scroll_top == 1
+        assert term._scroll_bottom == 3
+        assert term.cursor_row == 0
+        assert term.cursor_col == 0
+
+    def test_newline_scrolls_only_within_region(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"top\r\nr1\r\nr2\r\nr3\r\nbot")
+        term.process_bytes(b"\x1b[2;4r")
+        term.process_bytes(b"\x1b[4;1H\r\n")
+
+        # 区域外首行/末行不变，区域内上滚
+        assert term.grid[0][0].char == "t"
+        assert term.grid[4][0].char == "b"
+        assert term.grid[1][0].char == "r"
+        assert term.grid[1][1].char == "2"
+        assert term.grid[3][0].char == " "
+        assert term.cursor_row == 3
+
+    def test_newline_inside_region_moves_down(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[2;4r\x1b[2;1H\r\n")
+
+        assert term.cursor_row == 2
+
+    def test_bare_r_resets_to_full_screen(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[2;4r\x1b[r")
+
+        assert term._scroll_top == 0
+        assert term._scroll_bottom == 4
+
+    def test_invalid_region_ignored(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[4;2r")
+
+        assert term._scroll_top == 0
+        assert term._scroll_bottom == 4
+
+    def test_reverse_index_at_region_top_scrolls_region_down(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"top\r\nr1\r\nr2\r\nr3\r\nbot")
+        term.process_bytes(b"\x1b[2;4r\x1b[2;1H\x1bM")
+
+        assert term.grid[0][0].char == "t"
+        assert term.grid[4][0].char == "b"
+        assert term.grid[1][0].char == " "
+        assert term.grid[2][0].char == "r"
+        assert term.grid[2][1].char == "1"
+
+    def test_reset_clears_region(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[2;4r\x1bc")
+
+        assert term._scroll_top == 0
+        assert term._scroll_bottom == 4
+
+
 class TestEscSequences:
     def test_esc_c_full_reset(self, qtbot):
         term = TerminalEmulator(rows=3, cols=5)
