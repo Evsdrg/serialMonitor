@@ -541,6 +541,51 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestDecGraphicsCharset:
+    def test_graphics_mode_maps_box_drawing(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b(0lqk")
+
+        assert term.grid[0][0].char == "┌"
+        assert term.grid[0][1].char == "─"
+        assert term.grid[0][2].char == "┐"
+
+    def test_graphics_vertical_bar(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b(0x")
+
+        assert term.grid[0][0].char == "│"
+
+    def test_esc_paren_b_returns_to_ascii(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b(0q\x1b(Bq")
+
+        assert term.grid[0][0].char == "─"
+        assert term.grid[0][1].char == "q"
+
+    def test_other_designators_consumed_without_graphics(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b(Aq")
+
+        assert term.grid[0][0].char == "q"
+
+    def test_ris_resets_charset(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b(0\x1bcq")
+
+        assert term.grid[0][0].char == "q"
+
+
 class TestScrollRegion:
     def test_set_region_moves_cursor_home(self, qtbot):
         term = TerminalEmulator(rows=5, cols=5)

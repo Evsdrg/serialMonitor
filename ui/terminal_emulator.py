@@ -40,6 +40,35 @@ class _Cell:
     fmt: QTextCharFormat = field(default_factory=QTextCharFormat)
 
 
+_DEC_GRAPHICS = {
+    "`": "◆",
+    "a": "▒",
+    "f": "°",
+    "g": "±",
+    "j": "┘",
+    "k": "┐",
+    "l": "┌",
+    "m": "└",
+    "n": "┼",
+    "o": "⎺",
+    "p": "⎻",
+    "q": "─",
+    "r": "⎼",
+    "s": "⎽",
+    "t": "├",
+    "u": "┤",
+    "v": "┴",
+    "w": "┬",
+    "x": "│",
+    "y": "≤",
+    "z": "≥",
+    "{": "π",
+    "|": "≠",
+    "}": "£",
+    "~": "·",
+}
+
+
 class TerminalEmulator(QTextEdit):
     """VT100 风格终端模拟器。
 
@@ -81,6 +110,7 @@ class TerminalEmulator(QTextEdit):
         self._wrap_pending: bool = False
         self._scroll_top: int = 0
         self._scroll_bottom: int = rows - 1
+        self._dec_graphics: bool = False
 
         # 光标保存/恢复
         self._saved_row: int = 0
@@ -305,6 +335,15 @@ class TerminalEmulator(QTextEdit):
                         return
                     i = end
                     continue
+                elif i + 1 < length and text[i + 1] == "(":
+                    # 字符集切换：ESC ( 0 = DEC 图形，其他 = ASCII
+                    if i + 2 < length:
+                        self._dec_graphics = text[i + 2] == "0"
+                        i += 3
+                    else:
+                        self._esc_buf = text[i:]
+                        return
+                    continue
                 elif i + 1 < length:
                     nxt = text[i + 1]
                     if nxt == "c":
@@ -363,6 +402,8 @@ class TerminalEmulator(QTextEdit):
 
             # ── 普通字符 ──
             elif ch >= " ":
+                if self._dec_graphics:
+                    ch = _DEC_GRAPHICS.get(ch, ch)
                 self._put_char(ch)
                 i += 1
                 self._dirty = True
@@ -422,6 +463,7 @@ class TerminalEmulator(QTextEdit):
         self._wrap_pending = False
         self._scroll_top = 0
         self._scroll_bottom = self.rows - 1
+        self._dec_graphics = False
         self._ansi_parser.reset_format()
         self._dirty = True
         self._schedule_render()
