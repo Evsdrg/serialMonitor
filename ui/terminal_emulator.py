@@ -30,7 +30,6 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QApplication, QTextEdit
 
 from core.ansi_parser import AnsiParser
-from core.ansi import strip_ansi
 
 
 @dataclass
@@ -390,11 +389,6 @@ class TerminalEmulator(QTextEdit):
             self.grid.append([_Cell() for _ in range(self.cols)])
             self.cursor_row = self.rows - 1
 
-    def _scroll_up(self) -> None:
-        """滚屏一行（内容上移）。"""
-        self.grid.pop(0)
-        self.grid.append([_Cell() for _ in range(self.cols)])
-
     def _handle_private_mode(self, mode: str, enable: bool) -> None:
         """处理私有模式设置（\033[?nh/l），当前支持 DECTCEM（25）。"""
         if mode == "25":
@@ -581,6 +575,3 @@ class TerminalEmulator(QTextEdit):
         if at_bottom:
             self.moveCursor(QTextCursor.MoveOperation.End)
 
-    def _render_cursor_block(self, row: int, col: int) -> None:
-        """仅更新光标位置的高亮（用于光标闪烁，暂未启用）。"""
-        pass
