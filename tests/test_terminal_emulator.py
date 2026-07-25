@@ -322,7 +322,7 @@ class TestTerminalEmulatorKeyboard:
     def test_ctrl_shift_v_sends_clipboard_as_utf8(self, qtbot, qapp):
         term = TerminalEmulator(rows=2, cols=10)
         qtbot.addWidget(term)
-        qapp.clipboard().setText("你好\n")
+        qapp.clipboard().setText("你好")
         received = []
         term.key_pressed.connect(received.append)
 
@@ -335,7 +335,81 @@ class TestTerminalEmulatorKeyboard:
             ),
         )
 
-        assert received == ["你好\n".encode("utf-8")]
+        assert received == ["你好".encode("utf-8")]
+
+
+class TestPasteConfirmation:
+    def _paste(self, qtbot, term):
+        qtbot.keyClick(
+            term,
+            Qt.Key.Key_V,
+            modifier=(
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.ShiftModifier
+            ),
+        )
+
+    def test_multiline_paste_requires_second_confirmation(self, qtbot, qapp):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+        qapp.clipboard().setText("AT+GMI\nAT+GMR\n")
+        sent: list[bytes] = []
+        warnings: list[int] = []
+        term.key_pressed.connect(sent.append)
+        term.paste_warning.connect(warnings.append)
+
+        self._paste(qtbot, term)
+        assert sent == []
+        assert warnings == [3]
+
+        self._paste(qtbot, term)
+        assert sent == ["AT+GMI\nAT+GMR\n".encode("utf-8")]
+
+    def test_pending_paste_expires(self, qtbot, qapp):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+        qapp.clipboard().setText("line1\nline2\n")
+        sent: list[bytes] = []
+        term.key_pressed.connect(sent.append)
+
+        now = [1000.0]
+        term._paste_clock = lambda: now[0]
+
+        self._paste(qtbot, term)
+        assert sent == []
+
+        now[0] = 1004.0
+        self._paste(qtbot, term)
+        assert sent == []
+
+    def test_changed_clipboard_resets_pending(self, qtbot, qapp):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+        sent: list[bytes] = []
+        warnings: list[int] = []
+        term.key_pressed.connect(sent.append)
+        term.paste_warning.connect(warnings.append)
+
+        qapp.clipboard().setText("a\nb\n")
+        self._paste(qtbot, term)
+        qapp.clipboard().setText("c\nd\n")
+        self._paste(qtbot, term)
+
+        assert sent == []
+        assert len(warnings) == 2
+
+    def test_large_single_line_requires_confirmation(self, qtbot, qapp):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+        qapp.clipboard().setText("x" * 2000)
+        sent: list[bytes] = []
+        warnings: list[int] = []
+        term.key_pressed.connect(sent.append)
+        term.paste_warning.connect(warnings.append)
+
+        self._paste(qtbot, term)
+        assert sent == []
+        assert warnings == [1]
 
 
 class TestTerminalEmulatorSearch:

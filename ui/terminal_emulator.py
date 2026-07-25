@@ -78,9 +78,12 @@ class TerminalEmulator(QTextEdit):
     """
 
     key_pressed = pyqtSignal(bytes)
+    paste_warning = pyqtSignal(int)
 
     _SCROLL_MARGIN: int = 5
     _ESC_BUF_LIMIT: int = 4096
+    _PASTE_CONFIRM_SIZE: int = 1024
+    _PASTE_CONFIRM_SECONDS: float = 3.0
 
     def __init__(
         self,
@@ -124,6 +127,12 @@ class TerminalEmulator(QTextEdit):
         self._utf8_decoder = codecs.getincrementaldecoder("utf-8")(
             errors="backslashreplace"
         )
+
+        # 多行/超大粘贴的二次确认
+        self._pending_paste: tuple[str, float] | None = None
+        import time
+
+        self._paste_clock = time.monotonic
 
         # 渲染节流标记
         self._dirty: bool = True
@@ -244,9 +253,7 @@ class TerminalEmulator(QTextEdit):
                 self.copy()
                 return
             if key == Qt.Key.Key_V:
-                text = QApplication.clipboard().text()
-                if text:
-                    self.key_pressed.emit(text.encode("utf-8"))
+                self._paste_clipboard()
                 return
 
         # Ctrl+字母 → 控制字符
@@ -296,6 +303,32 @@ class TerminalEmulator(QTextEdit):
         text = event.text()
         if text and text.isprintable():
             self.key_pressed.emit(text.encode("utf-8"))
+
+    def _paste_clipboard(self) -> None:
+        """粘贴剪贴板；多行或超大内容需 3 秒内二次确认。"""
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+
+        risky = (
+            "\n" in text or "\r" in text or len(text) > self._PASTE_CONFIRM_SIZE
+        )
+        if not risky:
+            self.key_pressed.emit(text.encode("utf-8"))
+            return
+
+        now = self._paste_clock()
+        if (
+            self._pending_paste is not None
+            and self._pending_paste[0] == text
+            and now - self._pending_paste[1] < self._PASTE_CONFIRM_SECONDS
+        ):
+            self._pending_paste = None
+            self.key_pressed.emit(text.encode("utf-8"))
+            return
+
+        self._pending_paste = (text, now)
+        self.paste_warning.emit(text.count("\n") + 1)
 
     def _buffer_escape(self, text: str) -> None:
         """缓冲不完整转义序列；超限则丢弃，避免无界增长。"""

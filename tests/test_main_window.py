@@ -454,6 +454,14 @@ class TestSerialMonitorDataProcessing:
         assert "term_data" in grid_text
         assert "term_data" in monitor.terminal_display.toPlainText()
 
+    def test_paste_warning_shows_statusbar(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        monitor.terminal_emulator.paste_warning.emit(3)
+
+        assert "3" in monitor.statusBar().currentMessage()
+
     def test_send_payload_terminal_mode_uses_statusbar(self, qtbot):
         from core.payload_sender import SendResult, SendStatus
         from core.payload_sender import PayloadRequest

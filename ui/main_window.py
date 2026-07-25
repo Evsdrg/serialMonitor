@@ -343,6 +343,7 @@ class SerialMonitor(QMainWindow):
         self.terminal_emulator = TerminalEmulator(rows=24, cols=80)
         self.terminal_emulator.hide()
         self.terminal_emulator.key_pressed.connect(self._on_terminal_key)
+        self.terminal_emulator.paste_warning.connect(self._on_paste_warning)
 
         # ── 搜索栏 ──
         self.search_bar = SearchBar(self)
@@ -926,6 +927,10 @@ class SerialMonitor(QMainWindow):
             self.terminal_emulator.setFocus()
 
         self.update_texts()
+
+    def _on_paste_warning(self, lines: int) -> None:
+        """多行/超大粘贴请求二次确认时在状态栏提示。"""
+        self.statusBar().showMessage(self.t("paste_confirm").format(lines), 3000)
 
     def _on_terminal_key(self, data: bytes) -> None:
         """终端模拟器键盘输入 → 发送到当前传输。"""

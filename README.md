@@ -50,8 +50,8 @@ Supported terminal capabilities:
 Keyboard mapping:
 *   `Ctrl+字母` → 对应控制字符（如 `Ctrl+C` 发送 ETX）
 *   `Ctrl+Letter` → control character (e.g. `Ctrl+C` sends ETX)
-*   `Ctrl+Shift+C` 复制选中内容；`Ctrl+Shift+V` 将剪贴板文本发送到设备
-*   `Ctrl+Shift+C` copies the selection; `Ctrl+Shift+V` sends clipboard text to the device
+*   `Ctrl+Shift+C` 复制选中内容；`Ctrl+Shift+V` 将剪贴板文本发送到设备（多行或超大内容需 3 秒内再次按下确认）
+*   `Ctrl+Shift+C` copies the selection; `Ctrl+Shift+V` sends clipboard text to the device (multi-line or oversized content requires a second press within 3 s to confirm)
 *   方向键 / Home / End / F1–F12 发送对应 ANSI 转义序列；`Ctrl+F` 打开终端内搜索
 *   Arrow keys / Home / End / F1–F12 send the corresponding ANSI sequences; `Ctrl+F` opens in-terminal search
 
