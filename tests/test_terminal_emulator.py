@@ -541,6 +541,57 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestSgrFormatting:
+    def test_sgr_foreground_color_written_to_cell(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[31mA")
+
+        fmt = term.grid[0][0].fmt
+        assert fmt.foreground().color() == QColor(205, 49, 49)
+
+    def test_sgr_background_and_bold_written_to_cell(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[1;44mA")
+
+        fmt = term.grid[0][0].fmt
+        assert fmt.background().color() == QColor(36, 114, 200)
+        assert fmt.fontWeight() == 700
+
+    def test_sgr_reset_restores_default_format(self, qtbot):
+        from PyQt6.QtGui import QTextFormat
+
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[31mA\x1b[0mB")
+
+        fmt = term.grid[0][1].fmt
+        assert not fmt.hasProperty(QTextFormat.Property.ForegroundBrush)
+
+    def test_sgr_bare_m_resets(self, qtbot):
+        from PyQt6.QtGui import QTextFormat
+
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[32mA\x1b[mB")
+
+        fmt = term.grid[0][1].fmt
+        assert not fmt.hasProperty(QTextFormat.Property.ForegroundBrush)
+
+    def test_sgr_ignored_when_colors_disabled(self, qtbot):
+        from PyQt6.QtGui import QTextFormat
+
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.enable_ansi_colors = False
+        term.process_bytes(b"\x1b[31mA")
+
+        fmt = term.grid[0][0].fmt
+        assert not fmt.hasProperty(QTextFormat.Property.ForegroundBrush)
+        assert term.grid[0][0].char == "A"
+
+
 class TestNavigationKeyMapping:
     @pytest.mark.parametrize(
         "key,expected",

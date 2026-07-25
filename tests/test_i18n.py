@@ -59,3 +59,16 @@ class TestI18NInstance:
         zh_keys = set(I18N.TEXTS["zh"].keys())
         en_keys = set(I18N.TEXTS["en"].keys())
         assert zh_keys == en_keys
+
+    @pytest.mark.parametrize(
+        "key,zh,en",
+        [
+            ("terminal_mode_on", "终端模式", "Terminal"),
+            ("terminal_mode_off", "普通模式", "Normal"),
+            ("queued", "[已入队] {}", "[Queued] {}"),
+            ("queued_hex", "[已入队HEX] {}", "[Queued HEX] {}"),
+        ],
+    )
+    def test_terminal_and_queue_keys(self, key, zh, en):
+        assert I18N.get("zh", key) == zh
+        assert I18N.get("en", key) == en
