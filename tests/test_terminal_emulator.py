@@ -541,6 +541,82 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestCursorVisibility:
+    def test_dectcem_hide_and_show(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        assert term._cursor_visible is True
+
+        term.process_bytes(b"\x1b[?25l")
+        assert term._cursor_visible is False
+
+        term.process_bytes(b"\x1b[?25h")
+        assert term._cursor_visible is True
+
+    def test_other_private_modes_ignored(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"\x1b[?7l\x1b[?1000h")
+        assert term._cursor_visible is True
+
+    def test_hidden_cursor_not_highlighted_in_render(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"A\x1b[?25l")
+        term._cursor_phase = True
+        term._render_full()
+
+        pos = term.cursor_row * (term.cols + 1) + term.cursor_col
+        cursor = term.textCursor()
+        cursor.setPosition(pos)
+        fmt = cursor.charFormat()
+        assert fmt.background().color() != QColor(128, 128, 128)
+
+    def test_blink_toggles_phase_and_marks_dirty(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term._cursor_phase = True
+        term._dirty = False
+
+        term._blink_cursor()
+
+        assert term._cursor_phase is False
+        assert term._dirty is True
+
+    def test_blink_skips_render_when_cursor_hidden(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term._cursor_visible = False
+        term._dirty = False
+
+        term._blink_cursor()
+
+        assert term._dirty is False
+
+    def test_blink_skips_render_with_selection(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"AB")
+        term._render_full()
+        term.selectAll()
+        term._dirty = False
+
+        term._blink_cursor()
+
+        assert term._dirty is False
+
+    def test_blink_timer_follows_widget_visibility(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        assert not term._blink_timer.isActive()
+
+        term.show()
+        assert term._blink_timer.isActive()
+
+        term.hide()
+        assert not term._blink_timer.isActive()
+
+
 class TestTerminalResize:
     def test_resize_grid_grow_preserves_content(self, qtbot):
         term = TerminalEmulator(rows=2, cols=5)

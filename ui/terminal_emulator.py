@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QKeyEvent,
     QTextCharFormat,
@@ -96,6 +96,13 @@ class TerminalEmulator(QTextEdit):
         # 渲染节流标记
         self._dirty: bool = True
         self._render_pending: bool = False
+
+        # 光标可见性（DECTCEM）与闪烁
+        self._cursor_visible: bool = True
+        self._cursor_phase: bool = True
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setInterval(530)
+        self._blink_timer.timeout.connect(self._blink_cursor)
 
         # ECMA-48: parameter bytes, intermediate bytes, final byte.
         self._csi_terminator = re.compile(r"^([0-?]*)([ -/]*)([@-~])")
@@ -385,10 +392,37 @@ class TerminalEmulator(QTextEdit):
         self.grid.pop(0)
         self.grid.append([_Cell() for _ in range(self.cols)])
 
+    def _handle_private_mode(self, mode: str, enable: bool) -> None:
+        """处理私有模式设置（\033[?nh/l），当前支持 DECTCEM（25）。"""
+        if mode == "25":
+            self._cursor_visible = enable
+            self._dirty = True
+            self._schedule_render()
+
+    def _blink_cursor(self) -> None:
+        """切换光标闪烁相位；隐藏或有选区时跳过重绘。"""
+        self._cursor_phase = not self._cursor_phase
+        if self._cursor_visible and not self.textCursor().hasSelection():
+            self._dirty = True
+            self._schedule_render()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._blink_timer.start()
+
+    def hideEvent(self, event) -> None:
+        self._blink_timer.stop()
+        super().hideEvent(event)
+
     # ── 内部：CSI 序列处理 ────────────────────────────────────
 
     def _handle_csi(self, params_str: str, final: str) -> None:
         """处理 CSI（\033[...X）序列。"""
+        if params_str.startswith("?"):
+            if final in ("h", "l"):
+                self._handle_private_mode(params_str[1:], final == "h")
+            return
+
         if any(ch not in "0123456789;" for ch in params_str):
             return
 
@@ -515,6 +549,8 @@ class TerminalEmulator(QTextEdit):
         search_fmt.setBackground(QColor(255, 200, 0))
         search_fmt.setForeground(QColor(0, 0, 0))
 
+        cursor_active = self._cursor_visible and self._cursor_phase
+
         for row_idx, row in enumerate(self.grid):
             if row_idx > 0:
                 cursor.insertText("\n")
@@ -528,7 +564,11 @@ class TerminalEmulator(QTextEdit):
                     < self.search_highlight[1] + self.search_highlight[2]
                 ):
                     cursor.insertText(cell.char, search_fmt)
-                elif row_idx == self.cursor_row and col_idx == self.cursor_col:
+                elif (
+                    cursor_active
+                    and row_idx == self.cursor_row
+                    and col_idx == self.cursor_col
+                ):
                     cursor.insertText(cell.char, cursor_fmt)
                 else:
                     cursor.insertText(cell.char, QTextCharFormat(cell.fmt))
