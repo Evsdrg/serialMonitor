@@ -541,6 +541,27 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestEscapeBufferLimit:
+    def test_unterminated_osc_buffer_is_capped(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b]0;" + b"x" * 10000)
+
+        assert len(term._esc_buf) <= 4096
+
+    def test_normal_text_still_processed_after_cap(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b]0;" + b"x" * 10000)
+        term._esc_buf = ""
+        term.process_bytes(b"OK")
+
+        assert term.grid[0][0].char == "O"
+        assert term.grid[0][1].char == "K"
+
+
 class TestMiscCoverage:
     def test_csi_f_positions_cursor(self, qtbot):
         term = TerminalEmulator(rows=5, cols=10)

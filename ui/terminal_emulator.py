@@ -51,6 +51,7 @@ class TerminalEmulator(QTextEdit):
     key_pressed = pyqtSignal(bytes)
 
     _SCROLL_MARGIN: int = 5
+    _ESC_BUF_LIMIT: int = 4096
 
     def __init__(
         self,
@@ -262,6 +263,10 @@ class TerminalEmulator(QTextEdit):
         if text and text.isprintable():
             self.key_pressed.emit(text.encode("utf-8"))
 
+    def _buffer_escape(self, text: str) -> None:
+        """缓冲不完整转义序列；超限则丢弃，避免无界增长。"""
+        self._esc_buf = "" if len(text) > self._ESC_BUF_LIMIT else text
+
     # ── 内部：文本处理 ───────────────────────────────────────
 
     def _process_text(self, text: str) -> None:
@@ -286,13 +291,13 @@ class TerminalEmulator(QTextEdit):
                         continue
                     else:
                         # CSI 不完整，缓冲等待更多数据
-                        self._esc_buf = text[i:]
+                        self._buffer_escape(text[i:])
                         return
                 elif i + 1 < length and text[i + 1] in "]PX^_":
                     allow_bel = text[i + 1] == "]"
                     end = self._find_control_string_end(text, i + 2, allow_bel)
                     if end is None:
-                        self._esc_buf = text[i:]
+                        self._buffer_escape(text[i:])
                         return
                     i = end
                     continue
