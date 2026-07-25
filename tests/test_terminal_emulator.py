@@ -541,6 +541,32 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestNavigationKeyMapping:
+    @pytest.mark.parametrize(
+        "key,expected",
+        [
+            (Qt.Key.Key_Insert, b"\033[2~"),
+            (Qt.Key.Key_PageUp, b"\033[5~"),
+            (Qt.Key.Key_PageDown, b"\033[6~"),
+            (Qt.Key.Key_Delete, b"\033[3~"),
+            (Qt.Key.Key_Home, b"\033[H"),
+            (Qt.Key.Key_End, b"\033[F"),
+        ],
+    )
+    def test_navigation_keys(self, qtbot, key, expected):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        sent: list[bytes] = []
+        term.key_pressed.connect(sent.append)
+
+        event = QKeyEvent(
+            QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier
+        )
+        term.keyPressEvent(event)
+
+        assert sent == [expected]
+
+
 class TestCursorVisibility:
     def test_dectcem_hide_and_show(self, qtbot):
         term = TerminalEmulator(rows=2, cols=5)
