@@ -541,6 +541,32 @@ class TestTerminalEmulatorEdgeCases:
         assert term.grid[0][1].char == "K"
 
 
+class TestMiscCoverage:
+    def test_csi_f_positions_cursor(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=10)
+        qtbot.addWidget(term)
+
+        term.process_bytes(b"\x1b[2;3f")
+
+        assert term.cursor_row == 1
+        assert term.cursor_col == 2
+
+    def test_ctrl_non_letter_sends_nothing(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        sent: list[bytes] = []
+        term.key_pressed.connect(sent.append)
+
+        event = QKeyEvent(
+            QKeyEvent.Type.KeyPress,
+            Qt.Key.Key_1,
+            Qt.KeyboardModifier.ControlModifier,
+        )
+        term.keyPressEvent(event)
+
+        assert sent == []
+
+
 class TestSgrFormatting:
     def test_sgr_foreground_color_written_to_cell(self, qtbot):
         term = TerminalEmulator(rows=2, cols=5)

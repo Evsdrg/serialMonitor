@@ -27,6 +27,7 @@ from core.transport import (
     TransportTransition,
 )
 from ui.main_window import TerminalTrimManager, SerialMonitor
+from utils.settings import AppSettings
 
 
 DEFAULT_SETTINGS = {
@@ -452,6 +453,21 @@ class TestSerialMonitorDataProcessing:
         )
         assert "term_data" in grid_text
         assert "term_data" in monitor.terminal_display.toPlainText()
+
+    def test_load_settings_restores_terminal_mode(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        assert monitor.terminal_mode is False
+
+        with patch(
+            "ui.main_window.ConfigManager.load_app_settings",
+            return_value=AppSettings(terminal_mode=True),
+        ):
+            monitor.load_settings()
+
+        assert monitor.terminal_mode is True
+        assert monitor.terminal_mode_button.isChecked() is True
+        assert not monitor.terminal_display.isVisibleTo(monitor)
 
     def test_terminal_mode_data_participates_in_trimming(self, qtbot):
         monitor = SerialMonitor()

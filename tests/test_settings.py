@@ -102,3 +102,9 @@ def test_overflowing_integer_settings_fall_back():
 
     assert settings.checksum_start == 1
     assert settings.max_terminal_lines == 5000
+
+
+def test_invalid_terminal_mode_falls_back_to_false():
+    for bad in ("yes", 1, 0, None, []):
+        settings = AppSettings.from_dict({"terminal_mode": bad})
+        assert settings.terminal_mode is False
