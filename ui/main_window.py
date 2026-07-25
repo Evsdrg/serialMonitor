@@ -1325,8 +1325,11 @@ class SerialMonitor(QMainWindow):
             return
 
         if self.terminal_mode:
-            # 终端模式：直接交给模拟器处理
+            # 终端模式：模拟器渲染，同时镜像到隐藏文档以保留历史/参与裁剪
             self.terminal_emulator.process_bytes(data)
+            text = self._receive_decoder.decode(data, final=False)
+            if text:
+                self._append_received_text(text)
         elif self.receive_hex_mode:
             text = format_hex(data) + "\n"
             self.append_to_terminal(text, with_timestamp=True)
@@ -1340,8 +1343,7 @@ class SerialMonitor(QMainWindow):
             self.terminal_emulator.process_bytes(
                 (message + "\r\n").encode("utf-8", errors="replace")
             )
-        else:
-            self.append_to_terminal(message + "\n", with_timestamp=True)
+        self.append_to_terminal(message + "\n", with_timestamp=True)
 
     def _on_connection_error(
         self, mode: str, error: TransportError, interactive: bool

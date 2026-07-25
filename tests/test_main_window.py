@@ -446,9 +446,20 @@ class TestSerialMonitorDataProcessing:
         qtbot.addWidget(monitor)
         monitor.terminal_mode = True
         monitor._on_serial_data(b"term_data")
-        # 终端模式下数据由 emulator 处理，terminal_display 不应直接显示
-        text = monitor.terminal_display.toPlainText()
-        assert "term_data" not in text
+        # 终端模式双写：模拟器渲染 + 隐藏文档保留历史/日志
+        grid_text = "".join(
+            c.char for row in monitor.terminal_emulator.grid for c in row
+        )
+        assert "term_data" in grid_text
+        assert "term_data" in monitor.terminal_display.toPlainText()
+
+    def test_terminal_mode_data_participates_in_trimming(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.terminal_mode = True
+        with patch.object(monitor.trim_manager, "trim_if_needed") as trim_mock:
+            monitor._on_serial_data(b"line1\r\nline2\r\n")
+            trim_mock.assert_called()
 
     def test_on_serial_error_normal_mode(self, qtbot):
         monitor = SerialMonitor()
@@ -470,9 +481,12 @@ class TestSerialMonitorDataProcessing:
             TransportError(TransportOperation.READ, "term error", "COM1"),
             False,
         )
-        # 终端模式下错误也由 emulator 处理
-        text = monitor.terminal_display.toPlainText()
-        assert "term error" not in text
+        # 终端模式双写：模拟器显示 + 文档保留历史
+        grid_text = "".join(
+            c.char for row in monitor.terminal_emulator.grid for c in row
+        )
+        assert "term error" in grid_text
+        assert "term error" in monitor.terminal_display.toPlainText()
 
     def test_send_data_not_connected(self, qtbot):
         monitor = SerialMonitor()

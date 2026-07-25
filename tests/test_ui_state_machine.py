@@ -122,17 +122,18 @@ class TestModeDataFlow:
         assert "42" in text
 
     def test_terminal_mode_routes_to_emulator(self, qtbot):
-        """终端模式：数据走 emulator，不直接写 terminal_display。"""
+        """终端模式：数据走 emulator，同时镜像到 terminal_display 保留历史。"""
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
         monitor.terminal_mode = True
         monitor.show_timestamp = False
 
-        before = monitor.terminal_display.toPlainText()
         monitor._on_serial_data(b"term data\n")
-        after = monitor.terminal_display.toPlainText()
-        # 终端模式下数据由 emulator 处理，terminal_display 不应直接显示
-        assert before == after
+        grid_text = "".join(
+            c.char for row in monitor.terminal_emulator.grid for c in row
+        )
+        assert "term data" in grid_text
+        assert "term data" in monitor.terminal_display.toPlainText()
 
     def test_receive_mode_button_text(self, qtbot):
         """接收模式按钮的文本应随模式变化。"""
