@@ -454,6 +454,25 @@ class TestSerialMonitorDataProcessing:
         assert "term_data" in grid_text
         assert "term_data" in monitor.terminal_display.toPlainText()
 
+    def test_send_payload_terminal_mode_uses_statusbar(self, qtbot):
+        from core.payload_sender import SendResult, SendStatus
+        from core.payload_sender import PayloadRequest
+
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.terminal_mode = True
+        doc_before = monitor.terminal_display.toPlainText()
+
+        with patch.object(
+            monitor.payload_sender,
+            "send",
+            return_value=SendResult(SendStatus.SENT, payload=b"cmd"),
+        ):
+            monitor.send_payload(PayloadRequest(text="cmd"), display_text="cmd")
+
+        assert "cmd" in monitor.statusBar().currentMessage()
+        assert monitor.terminal_display.toPlainText() == doc_before
+
     def test_load_settings_restores_terminal_mode(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)

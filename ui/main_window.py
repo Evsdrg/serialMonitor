@@ -1444,7 +1444,7 @@ class SerialMonitor(QMainWindow):
             )
             return result
 
-        if display_sent and display_text is not None and not self.terminal_mode:
+        if display_sent and display_text is not None:
             if result.checksum is not None:
                 display_text += self.t("ck_tag").format(result.checksum)
             if result.status is SendStatus.QUEUED:
@@ -1455,9 +1455,11 @@ class SerialMonitor(QMainWindow):
                 sent_key = sent_key or (
                     "sent_hex" if display_as_hex else "sent"
                 )
-            self.append_to_terminal(
-                self.t(sent_key).format(display_text) + "\n", with_timestamp=True
-            )
+            line = self.t(sent_key).format(display_text)
+            if self.terminal_mode:
+                self.statusBar().showMessage(line, 3000)
+            else:
+                self.append_to_terminal(line + "\n", with_timestamp=True)
         return result
 
     # ── 模式切换 ─────────────────────────────────────────────
