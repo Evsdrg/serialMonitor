@@ -29,6 +29,35 @@ Main features:
 
 Connection modes include local serial, Raw TCP, and RFC2217. Raw TCP transfers bytes without protocol processing; RFC2217 negotiates remote serial settings over Telnet. RFC2217 provides no authentication or encryption and should only be used on trusted networks, VPNs, or SSH tunnels.
 
+## 终端模式 (Terminal Mode)
+
+点击「终端模式」按钮可在普通日志视图与终端模拟器之间切换。终端模式面向 MCU CLI、Bootloader 和 AT 命令等交互场景，键盘输入直接发送到当前连接，设备输出按字符网格渲染。
+
+Click the "Terminal Mode" button to switch between the plain log view and the terminal emulator. Terminal mode targets interactive scenarios such as MCU CLIs, bootloaders, and AT commands: keyboard input is sent directly to the active connection and device output is rendered on a character grid.
+
+支持的终端能力：  
+Supported terminal capabilities:
+*   80×24 字符网格，`\r` / `\n` / Tab / 退格、行末延迟换行与滚屏
+*   80×24 character grid with CR/LF/Tab/backspace, delayed wrap and scrolling
+*   CSI 光标移动与定位（`A/B/C/D/H/f`）、清行（`K`）、清屏（`J`）、光标保存/恢复（`s/u`）
+*   CSI cursor movement and positioning (`A/B/C/D/H/f`), erase line (`K`), erase display (`J`), save/restore cursor (`s/u`)
+*   SGR 颜色（8 色 + 亮色）、粗体、下划线、反显与复位
+*   SGR colors (8 + bright), bold, underline, reverse video and reset
+*   OSC/DCS 控制字符串会被安全丢弃，UTF-8 与不完整转义序列可跨数据包正确处理
+*   OSC/DCS control strings are safely discarded; UTF-8 and partial escape sequences are handled across chunks
+
+键盘映射：  
+Keyboard mapping:
+*   `Ctrl+字母` → 对应控制字符（如 `Ctrl+C` 发送 ETX）
+*   `Ctrl+Letter` → control character (e.g. `Ctrl+C` sends ETX)
+*   `Ctrl+Shift+C` 复制选中内容；`Ctrl+Shift+V` 将剪贴板文本发送到设备
+*   `Ctrl+Shift+C` copies the selection; `Ctrl+Shift+V` sends clipboard text to the device
+*   方向键 / Home / End / F1–F12 发送对应 ANSI 转义序列；`Ctrl+F` 打开终端内搜索
+*   Arrow keys / Home / End / F1–F12 send the corresponding ANSI sequences; `Ctrl+F` opens in-terminal search
+
+当前限制：网格尺寸固定 80×24，无滚动回退缓冲，不支持 256 色/真彩色，CJK 宽字符按单格处理，终端模式输出不参与日志裁剪。  
+Current limitations: fixed 80×24 grid, no scrollback buffer, no 256-color/true-color support, CJK wide characters occupy a single cell, and terminal-mode output is not subject to log trimming.
+
 ## 环境需求 (Requirements)
 
 *   **Python 版本**: 推荐 **Python 3.12** 或更高版本。
