@@ -134,6 +134,61 @@ class TerminalEmulator(QTextEdit):
         self.cols = cols
         self.clear_screen()
 
+    def resize_grid(self, rows: int, cols: int) -> None:
+        """调整网格尺寸并保留内容（底部锚定，光标钳制）。"""
+        rows = max(1, int(rows))
+        cols = max(1, int(cols))
+        if rows == self.rows and cols == self.cols:
+            return
+
+        if cols != self.cols:
+            for row in self.grid:
+                if cols > self.cols:
+                    row.extend(_Cell() for _ in range(cols - self.cols))
+                else:
+                    del row[cols:]
+
+        if rows > self.rows:
+            blank = [[_Cell() for _ in range(cols)] for _ in range(rows - self.rows)]
+            self.grid = blank + self.grid
+            self.cursor_row += rows - self.rows
+        elif rows < self.rows:
+            drop = self.rows - rows
+            self.grid = self.grid[drop:]
+            self.cursor_row -= drop
+
+        self.rows = rows
+        self.cols = cols
+        self.cursor_row = max(0, min(self.cursor_row, rows - 1))
+        self.cursor_col = max(0, min(self.cursor_col, cols - 1))
+        self._wrap_pending = False
+        self._dirty = True
+        self._schedule_render()
+
+    def _fit_dimensions(self, width: int, height: int) -> tuple[int, int]:
+        """按可用像素和字体度量计算可容纳的行列数。"""
+        from PyQt6.QtGui import QFontMetricsF
+
+        fm = QFontMetricsF(self.font())
+        cell_w = max(1.0, fm.horizontalAdvance("M"))
+        cell_h = max(1.0, fm.lineSpacing())
+        cols = max(1, int(width // cell_w))
+        rows = max(1, int(height // cell_h))
+        return rows, cols
+
+    def resize_to_fit(self) -> None:
+        """按当前视口尺寸调整网格。"""
+        margin = self.document().documentMargin()
+        width = max(0, int(self.viewport().width() - 2 * margin))
+        height = max(0, int(self.viewport().height() - 2 * margin))
+        rows, cols = self._fit_dimensions(width, height)
+        if (rows, cols) != (self.rows, self.cols):
+            self.resize_grid(rows, cols)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.resize_to_fit()
+
     # ── 键盘事件 ─────────────────────────────────────────────
 
     def keyPressEvent(self, event: QKeyEvent) -> None:

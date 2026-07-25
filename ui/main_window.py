@@ -922,6 +922,7 @@ class SerialMonitor(QMainWindow):
 
         if self.terminal_mode:
             self.terminal_emulator.enable_ansi_colors = self.enable_ansi_colors
+            self.terminal_emulator.resize_to_fit()
             self.terminal_emulator.setFocus()
 
         self.update_texts()

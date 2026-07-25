@@ -539,3 +539,90 @@ class TestTerminalEmulatorEdgeCases:
         assert term._esc_buf == ""
         assert term.grid[0][0].char == "O"
         assert term.grid[0][1].char == "K"
+
+
+class TestTerminalResize:
+    def test_resize_grid_grow_preserves_content(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"AB")
+
+        term.resize_grid(4, 10)
+
+        assert term.rows == 4
+        assert term.cols == 10
+        # 底部锚定：内容下移，光标跟随
+        assert term.grid[2][0].char == "A"
+        assert term.grid[2][1].char == "B"
+        assert term.cursor_row == 2
+        assert term.cursor_col == 2
+
+    def test_resize_grid_shrink_rows_drops_top(self, qtbot):
+        term = TerminalEmulator(rows=3, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"one\r\ntwo\r\nth")
+
+        term.resize_grid(2, 5)
+
+        assert term.rows == 2
+        assert term.grid[0][0].char == "t"
+        assert term.grid[1][0].char == "t"
+        assert term.grid[1][1].char == "h"
+        assert term.cursor_row == 1
+        assert term.cursor_col == 2
+
+    def test_resize_grid_shrink_cols_truncates_and_clamps(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=10)
+        qtbot.addWidget(term)
+        term.process_bytes(b"ABCDEFGHIJ")
+
+        term.resize_grid(2, 5)
+
+        assert term.cols == 5
+        assert term.grid[0][0].char == "A"
+        assert term.grid[0][4].char == "E"
+        assert term.cursor_col == 4
+        assert term._wrap_pending is False
+
+    def test_resize_grid_same_size_is_noop(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.process_bytes(b"AB")
+        grid_before = term.grid
+
+        term.resize_grid(2, 5)
+
+        assert term.grid is grid_before
+
+    def test_fit_dimensions_floors_to_cell_size(self, qtbot):
+        from PyQt6.QtGui import QFontMetricsF
+
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        fm = QFontMetricsF(term.font())
+        cell_w = fm.horizontalAdvance("M")
+        cell_h = fm.lineSpacing()
+
+        rows, cols = term._fit_dimensions(int(cell_w * 10.7), int(cell_h * 5.2))
+        assert (rows, cols) == (5, 10)
+
+        # 过小尺寸钳制为 1x1
+        assert term._fit_dimensions(1, 1) == (1, 1)
+
+    def test_resize_event_updates_dimensions(self, qtbot):
+        term = TerminalEmulator(rows=2, cols=5)
+        qtbot.addWidget(term)
+        term.show()
+        term.resize(640, 480)
+        qtbot.waitUntil(lambda: term.viewport().width() > 0)
+
+        term.resize_to_fit()
+
+        margin = term.document().documentMargin()
+        expected_rows, expected_cols = term._fit_dimensions(
+            int(term.viewport().width() - 2 * margin),
+            int(term.viewport().height() - 2 * margin),
+        )
+        assert (term.rows, term.cols) == (expected_rows, expected_cols)
+        assert term.rows > 2
+        assert term.cols > 5
