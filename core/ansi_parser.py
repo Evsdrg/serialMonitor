@@ -73,6 +73,21 @@ class AnsiParser:
         self.current_format = QTextCharFormat()
         self._reverse_video = False
 
+    def _xterm_256_color(self, index: int) -> QColor | None:
+        """xterm 256 色调色板：0-15 基本色、16-231 立方体、232-255 灰阶。"""
+        if not 0 <= index <= 255:
+            return None
+        if index < 8:
+            return self.fg_colors[str(30 + index)]
+        if index < 16:
+            return self.fg_colors[str(90 + index - 8)]
+        if index < 232:
+            levels = (0, 95, 135, 175, 215, 255)
+            n = index - 16
+            return QColor(levels[n // 36], levels[(n % 36) // 6], levels[n % 6])
+        gray = 8 + 10 * (index - 232)
+        return QColor(gray, gray, gray)
+
     def parse_code(self, code: str) -> None:
         """解析 ANSI 转义码并更新当前格式"""
         if not code:
@@ -87,9 +102,45 @@ class AnsiParser:
 
         codes = code.split(";")
 
-        for c in codes:
+        i = 0
+        while i < len(codes):
+            c = codes[i]
+            i += 1
             if not c:
                 continue
+
+            if c in ("38", "48") and i < len(codes):
+                is_fg = c == "38"
+                mode = codes[i]
+                if mode == "5" and i + 1 < len(codes):
+                    try:
+                        color = self._xterm_256_color(int(codes[i + 1]))
+                    except ValueError:
+                        color = None
+                    if color is not None:
+                        if is_fg:
+                            self.current_format.setForeground(color)
+                        else:
+                            self.current_format.setBackground(color)
+                    i += 2
+                    continue
+                if mode == "2" and i + 3 < len(codes):
+                    try:
+                        r, g, b = (
+                            int(codes[i + 1]),
+                            int(codes[i + 2]),
+                            int(codes[i + 3]),
+                        )
+                    except ValueError:
+                        i += 4
+                        continue
+                    color = QColor(r, g, b)
+                    if is_fg:
+                        self.current_format.setForeground(color)
+                    else:
+                        self.current_format.setBackground(color)
+                    i += 4
+                    continue
 
             if c == "0":
                 self.reset_format()

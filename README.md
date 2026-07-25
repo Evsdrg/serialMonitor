@@ -41,8 +41,8 @@ Supported terminal capabilities:
 *   80×24 character grid with CR/LF/Tab/backspace, delayed wrap and scrolling
 *   CSI 光标移动与定位（`A/B/C/D/H/f`）、清行（`K`）、清屏（`J`）、光标保存/恢复（`s/u`）
 *   CSI cursor movement and positioning (`A/B/C/D/H/f`), erase line (`K`), erase display (`J`), save/restore cursor (`s/u`)
-*   SGR 颜色（8 色 + 亮色）、粗体、下划线、反显与复位
-*   SGR colors (8 + bright), bold, underline, reverse video and reset
+*   SGR 颜色（8 色 + 亮色、256 色、真彩色）、粗体、下划线、反显与复位
+*   SGR colors (8 + bright, 256-color, true color), bold, underline, reverse video and reset
 *   OSC/DCS 控制字符串会被安全丢弃，UTF-8 与不完整转义序列可跨数据包正确处理
 *   OSC/DCS control strings are safely discarded; UTF-8 and partial escape sequences are handled across chunks
 
@@ -55,8 +55,8 @@ Keyboard mapping:
 *   方向键 / Home / End / F1–F12 发送对应 ANSI 转义序列；`Ctrl+F` 打开终端内搜索
 *   Arrow keys / Home / End / F1–F12 send the corresponding ANSI sequences; `Ctrl+F` opens in-terminal search
 
-当前限制：网格尺寸固定 80×24，无滚动回退缓冲，不支持 256 色/真彩色，CJK 宽字符按单格处理，终端模式输出不参与日志裁剪。  
-Current limitations: fixed 80×24 grid, no scrollback buffer, no 256-color/true-color support, CJK wide characters occupy a single cell, and terminal-mode output is not subject to log trimming.
+当前限制：无滚动回退缓冲，CJK 宽字符按单格处理。网格行列随窗口尺寸自适应，终端模式输出会同时写入日志裁剪管线。  
+Current limitations: no scrollback buffer and CJK wide characters occupy a single cell. The grid adapts to the window size, and terminal-mode output is mirrored into the log-trimming pipeline.
 
 ## 环境需求 (Requirements)
 

@@ -2,6 +2,8 @@
 测试 core/ansi_parser.py
 """
 
+from PyQt6.QtGui import QColor
+
 import pytest
 from PyQt6.QtCore import Qt
 
@@ -191,3 +193,56 @@ class TestAnsiParserEdgeCases:
         result = parser.parse_text("\x1b[31m")
         # 末尾的转义码不应被解析为可见字符
         assert all(seg[0] == "" for seg in result) or len(result) == 1
+
+
+class TestAnsiParserExtendedColors:
+    def test_256_color_foreground_cube(self):
+        parser = AnsiParser()
+        parser.parse_code("38;5;196m")
+        assert parser.current_format.foreground().color() == QColor(255, 0, 0)
+
+    def test_256_color_background_cube(self):
+        parser = AnsiParser()
+        parser.parse_code("48;5;21m")
+        assert parser.current_format.background().color() == QColor(0, 0, 255)
+
+    def test_256_color_standard_matches_base_palette(self):
+        parser = AnsiParser()
+        parser.parse_code("38;5;1m")
+        assert parser.current_format.foreground().color() == QColor(205, 49, 49)
+
+    def test_256_color_bright_matches_base_palette(self):
+        parser = AnsiParser()
+        parser.parse_code("38;5;9m")
+        assert parser.current_format.foreground().color() == QColor(241, 76, 76)
+
+    def test_256_color_grayscale(self):
+        parser = AnsiParser()
+        parser.parse_code("38;5;232m")
+        assert parser.current_format.foreground().color() == QColor(8, 8, 8)
+
+    def test_truecolor_foreground(self):
+        parser = AnsiParser()
+        parser.parse_code("38;2;12;34;56m")
+        assert parser.current_format.foreground().color() == QColor(12, 34, 56)
+
+    def test_truecolor_background(self):
+        parser = AnsiParser()
+        parser.parse_code("48;2;200;100;50m")
+        assert parser.current_format.background().color() == QColor(200, 100, 50)
+
+    def test_malformed_extended_sequence_ignored(self):
+        from PyQt6.QtGui import QTextFormat
+
+        parser = AnsiParser()
+        parser.parse_code("38;5m")
+        parser.parse_code("38;2;10m")
+        assert not parser.current_format.hasProperty(
+            QTextFormat.Property.ForegroundBrush
+        )
+
+    def test_extended_color_in_parse_text(self):
+        parser = AnsiParser()
+        segments = parser.parse_text("\x1b[38;5;196mred")
+        assert segments[-1][0] == "red"
+        assert segments[-1][1].foreground().color() == QColor(255, 0, 0)
