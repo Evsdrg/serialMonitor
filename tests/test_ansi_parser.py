@@ -248,6 +248,33 @@ class TestAnsiParserExtendedColors:
         assert segments[-1][1].foreground().color() == QColor(255, 0, 0)
 
 
+class TestZeroPaddedAndControlStrings:
+    """P1: 零填充 SGR 参数与非 SGR 控制串"""
+
+    def test_zero_padded_sgr_applies_color(self):
+        parser = AnsiParser()
+        parser.parse_code("01;31m")
+        fmt = parser.current_format
+        assert fmt.foreground().color() == QColor(205, 49, 49)
+
+    def test_zero_padded_reset_clears_format(self):
+        parser = AnsiParser()
+        parser.parse_code("31m")
+        parser.parse_code("00m")
+        fmt = parser.current_format
+        assert not fmt.hasProperty(QTextFormat.Property.ForegroundBrush)
+
+    def test_osc_sequence_is_not_rendered(self):
+        parser = AnsiParser()
+        segments = parser.parse_text("\x1b]0;window title\x07hello")
+        assert "".join(s[0] for s in segments) == "hello"
+
+    def test_non_sgr_csi_is_not_rendered(self):
+        parser = AnsiParser()
+        segments = parser.parse_text("\x1b[2Khello")
+        assert "".join(s[0] for s in segments) == "hello"
+
+
 class TestExtendedColorEdgeCases:
     def test_truecolor_components_clamped(self):
         parser = AnsiParser()

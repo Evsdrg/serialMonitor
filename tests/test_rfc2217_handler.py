@@ -10,7 +10,7 @@ import serial
 import serial.rfc2217
 
 from core.rfc2217_handler import Rfc2217Handler
-from core.transport import TransportOperation, TransportState
+from core.transport import DisconnectReason, TransportOperation, TransportState
 
 
 class _Rfc2217Redirector:
@@ -141,6 +141,20 @@ def rfc_handler():
     handler = Rfc2217Handler()
     yield handler
     handler.shutdown()
+
+
+class TestRfc2217UserDisconnectReason:
+    """P1: 用户主动断开时，后到的 worker 错误不得改写断开原因"""
+
+    def test_user_close_reason_survives_worker_error(self, rfc_handler):
+        rfc_handler._disconnect_reason = DisconnectReason.USER
+        rfc_handler._state = TransportState.CLOSING
+        worker = Mock()
+        rfc_handler._worker = worker
+
+        rfc_handler._on_worker_error(worker, "socket closed", "io")
+
+        assert rfc_handler._disconnect_reason is DisconnectReason.USER
 
 
 class TestRfc2217Handler:

@@ -141,7 +141,8 @@ class SerialHandler(TransportHandler):
 
     @property
     def endpoint(self) -> str:
-        return self.current_port or self._target_port or ""
+        # 正在建连时以目标端口为准，避免错误事件报出上一个端口
+        return self._target_port or self.current_port or ""
 
     @staticmethod
     def get_available_ports() -> list[str]:
@@ -231,7 +232,11 @@ class SerialHandler(TransportHandler):
             self._transition(TransportState.CONNECTED)
             return True
         except (OSError, ValueError, serial.SerialException) as e:
-            self._emit_error(TransportOperation.CONNECT, str(e))
+            self._emit_error(
+                TransportOperation.CONNECT,
+                str(e),
+                reason=DisconnectReason.CONNECT_FAILED,
+            )
             self._transition(
                 TransportState.DISCONNECTED, DisconnectReason.CONNECT_FAILED
             )
@@ -342,8 +347,14 @@ class SerialHandler(TransportHandler):
             reader = reader_or_message
         if reader is not self._reader_thread:
             return
-        self._emit_error(TransportOperation.READ, message)
-        self.close(reason=DisconnectReason.IO_ERROR)
+        # 设备已从系统消失 → DEVICE_REMOVED，否则视为链路 I/O 错误
+        reason = (
+            DisconnectReason.DEVICE_REMOVED
+            if self.current_port and self.current_port not in self.get_available_ports()
+            else DisconnectReason.IO_ERROR
+        )
+        self._emit_error(TransportOperation.READ, message, reason=reason)
+        self.close(reason=reason)
 
     def close(
         self, reason: DisconnectReason = DisconnectReason.USER

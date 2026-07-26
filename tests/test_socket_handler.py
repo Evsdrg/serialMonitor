@@ -5,10 +5,36 @@ import threading
 import time
 from unittest.mock import Mock
 
-from PyQt6.QtNetwork import QAbstractSocket
+from PyQt6.QtNetwork import QAbstractSocket, QHostAddress, QTcpServer
 
 from core.socket_handler import SocketHandler
-from core.transport import TransportState
+from core.transport import DisconnectReason, TransportState
+
+
+class TestSocketConnectTimeout:
+    """P1: 连接必须有超时，否则黑洞地址会永久 CONNECTING"""
+
+    def test_connect_timeout_fails_session(self, qtbot):
+        handler = SocketHandler()
+        handler._CONNECT_TIMEOUT_MS = 120
+
+        with qtbot.waitSignal(handler.transport_error, timeout=3000) as blocker:
+            handler.open("192.0.2.1", 9)
+
+        assert blocker.args[0].reason is DisconnectReason.CONNECT_FAILED
+        assert handler.state is TransportState.DISCONNECTED
+
+    def test_successful_connect_cancels_timeout(self, qtbot):
+        server = QTcpServer()
+        assert server.listen(QHostAddress("127.0.0.1"), 0)
+        handler = SocketHandler()
+
+        with qtbot.waitSignal(handler.connection_changed, timeout=3000):
+            handler.open("127.0.0.1", server.serverPort())
+
+        assert handler._connect_timer.isActive() is False
+        handler.close()
+        server.close()
 
 
 class TestSocketHandler:

@@ -155,7 +155,13 @@ class AppSettings:
     def from_dict(cls, raw: Any) -> "AppSettings":
         data = raw if isinstance(raw, dict) else {}
         connections = data.get("connections")
-        if data.get("schema_version") == 2 and isinstance(connections, dict):
+        schema_version = data.get("schema_version")
+        # 未来版本仍可能带同结构的 connections，不应整块丢弃退回 flat 迁移
+        if (
+            isinstance(schema_version, int)
+            and schema_version >= 2
+            and isinstance(connections, dict)
+        ):
             serial_data = connections.get("serial", {})
             tcp_data = connections.get("tcp", {})
             rfc_data = connections.get("rfc2217", {})

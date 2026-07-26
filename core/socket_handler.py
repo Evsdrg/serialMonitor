@@ -18,6 +18,8 @@ from core.transport import (
 class SocketHandler(TransportHandler):
     """基于 Qt 事件循环的非阻塞透明 TCP client。"""
 
+    _CONNECT_TIMEOUT_MS = 10000
+
     def __init__(self) -> None:
         super().__init__()
         self._socket = self._create_socket()
@@ -27,7 +29,9 @@ class SocketHandler(TransportHandler):
         self._connected_once = False
         self._manual_close = False
         self._disconnect_reason: Optional[DisconnectReason] = None
-
+        self._connect_timer = QTimer(self)
+        self._connect_timer.setSingleShot(True)
+        self._connect_timer.timeout.connect(self._on_connect_timeout)
 
     def _create_socket(self) -> QTcpSocket:
         socket = QTcpSocket(self)
@@ -81,8 +85,23 @@ class SocketHandler(TransportHandler):
         self._session_active = True
         self._connected_once = False
         self._transition(TransportState.CONNECTING)
+        self._connect_timer.start(self._CONNECT_TIMEOUT_MS)
         self._socket.connectToHost(host, socket_port)
         return True
+
+    def _on_connect_timeout(self) -> None:
+        """建连超时：黑洞地址不会触发 Qt 错误，必须自行终止会话。"""
+        if self._state is not TransportState.CONNECTING:
+            return
+        self._disconnect_reason = DisconnectReason.CONNECT_FAILED
+        self._emit_error(
+            TransportOperation.CONNECT,
+            "Connection timed out",
+            reason=DisconnectReason.CONNECT_FAILED,
+        )
+        self._socket.abort()
+        if self._session_active:
+            self._finish_disconnected(DisconnectReason.CONNECT_FAILED)
 
     def close(
         self, reason: DisconnectReason = DisconnectReason.USER
@@ -171,6 +190,7 @@ class SocketHandler(TransportHandler):
     def _on_connected(self) -> None:
         if not self._is_current_socket_signal():
             return
+        self._connect_timer.stop()
         if self._state is TransportState.CLOSING:
             self._socket.disconnectFromHost()
             return
@@ -241,6 +261,7 @@ class SocketHandler(TransportHandler):
     ) -> None:
         if self._state is TransportState.DISCONNECTED:
             return
+        self._connect_timer.stop()
         self._session_active = False
         self._connected_once = False
         self._transition(

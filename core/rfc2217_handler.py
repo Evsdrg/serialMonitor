@@ -408,21 +408,25 @@ class Rfc2217Handler(TransportHandler):
     ) -> None:
         if worker is not self._worker:
             return
+        # 用户主动断开的原因优先，后到的 worker 错误不得改写
+        user_close = self._disconnect_reason is DisconnectReason.USER
         if context == "connect":
             operation = TransportOperation.CONNECT
-            self._disconnect_reason = DisconnectReason.CONNECT_FAILED
+            reason = DisconnectReason.CONNECT_FAILED
         elif context == "remote":
             operation = TransportOperation.READ
-            self._disconnect_reason = DisconnectReason.REMOTE
+            reason = DisconnectReason.REMOTE
         elif context == "write":
             operation = TransportOperation.WRITE
-            self._disconnect_reason = DisconnectReason.IO_ERROR
+            reason = DisconnectReason.IO_ERROR
         elif context == "control":
             operation = TransportOperation.CONTROL
-            self._disconnect_reason = DisconnectReason.IO_ERROR
+            reason = DisconnectReason.IO_ERROR
         else:
             operation = TransportOperation.READ
-            self._disconnect_reason = DisconnectReason.IO_ERROR
+            reason = DisconnectReason.IO_ERROR
+        if not user_close:
+            self._disconnect_reason = reason
         self._emit_error(
             operation,
             message,

@@ -9,7 +9,64 @@ import serial
 from unittest.mock import MagicMock, Mock, call, patch
 
 from core.serial_handler import SerialHandler
-from core.transport import TransportOperation, TransportState
+from core.transport import DisconnectReason, TransportOperation, TransportState
+
+
+# 保活：避免 handler 被 GC 后 C++ 地址复用，导致后续实例被 sip 判为已删除
+_KEEPALIVE: list = []
+
+
+def _tracked_handler() -> SerialHandler:
+    handler = SerialHandler()
+    _KEEPALIVE.append(handler)
+    return handler
+
+
+class TestTransportErrorSemantics:
+    """P1: 错误事件必须携带断开原因与正确的 endpoint"""
+
+    def test_reader_error_after_device_removal_marks_reason(self, qtbot):
+        handler = _tracked_handler()
+        handler._state = TransportState.CONNECTED
+        handler.current_port = "/dev/ttyUSB0"
+        handler.serial_port = Mock(is_open=True)
+        reader = Mock()
+        handler._reader_thread = reader
+
+        with patch.object(
+            SerialHandler, "get_available_ports", return_value=[]
+        ), qtbot.waitSignal(handler.transport_error, timeout=1000) as blocker:
+            handler._on_reader_error(reader, "device gone")
+
+        assert blocker.args[0].reason is DisconnectReason.DEVICE_REMOVED
+
+    def test_reader_error_with_port_present_is_io_error(self, qtbot):
+        handler = _tracked_handler()
+        handler._state = TransportState.CONNECTED
+        handler.current_port = "/dev/ttyUSB0"
+        handler.serial_port = Mock(is_open=True)
+        reader = Mock()
+        handler._reader_thread = reader
+
+        with patch.object(
+            SerialHandler, "get_available_ports", return_value=["/dev/ttyUSB0"]
+        ), qtbot.waitSignal(handler.transport_error, timeout=1000) as blocker:
+            handler._on_reader_error(reader, "framing error")
+
+        assert blocker.args[0].reason is DisconnectReason.IO_ERROR
+
+    def test_connect_failure_reports_target_endpoint(self, qtbot):
+        handler = _tracked_handler()
+        handler.current_port = "/dev/ttyOLD"
+
+        with patch(
+            "core.serial_handler.serial.Serial",
+            side_effect=serial.SerialException("boom"),
+        ), qtbot.waitSignal(handler.transport_error, timeout=1000) as blocker:
+            handler.open("/dev/ttyNEW")
+
+        assert blocker.args[0].endpoint == "/dev/ttyNEW"
+        assert blocker.args[0].reason is DisconnectReason.CONNECT_FAILED
 
 
 class TestSerialHandlerStatic:

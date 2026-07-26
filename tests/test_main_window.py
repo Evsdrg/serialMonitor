@@ -587,6 +587,100 @@ class TestSerialMonitorDataProcessing:
         assert monitor.checksum_end_combo.count() == 5
         assert monitor.checksum_end_combo.currentIndex() == 4
 
+    def test_clear_receive_area_clears_mirror_document(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.terminal_mode = True
+        monitor._on_serial_data(b"stale history\r\n")
+
+        monitor.clear_receive_area()
+
+        assert monitor.terminal_display.toPlainText().strip() == ""
+
+    def test_leaving_terminal_mode_clears_search_highlight(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.toggle_terminal_mode()
+        monitor.terminal_emulator.search_highlight = (0, 0, 3)
+
+        monitor.toggle_terminal_mode()
+
+        assert monitor.terminal_emulator.search_highlight is None
+
+    def test_rebuild_trim_menu_does_not_leak_menus(self, qtbot):
+        from PyQt6.QtWidgets import QMenu
+
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        before = len(monitor.findChildren(QMenu))
+        for _ in range(5):
+            monitor._rebuild_trim_menu()
+        after = len(monitor.findChildren(QMenu))
+
+        assert after <= before
+
+    def test_auto_theme_applies_on_startup(self, qtbot):
+        settings = AppSettings(theme_index=0)
+        with (
+            patch(
+                "ui.main_window.ConfigManager.load_app_settings",
+                return_value=settings,
+            ),
+            patch("ui.main_window.is_system_dark_mode", return_value=False),
+        ):
+            monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        assert monitor.current_theme == "light"
+
+    def test_refresh_ports_keeps_selected_port(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        with patch.object(
+            monitor.serial_handler,
+            "get_available_ports",
+            return_value=["/dev/ttyUSB0", "/dev/ttyUSB1"],
+        ):
+            monitor.refresh_ports()
+        monitor.port_combo.setCurrentText("/dev/ttyUSB1")
+
+        # 设备短暂消失后再回来，选择不应丢失
+        with patch.object(
+            monitor.serial_handler,
+            "get_available_ports",
+            return_value=["/dev/ttyUSB0"],
+        ):
+            monitor.refresh_ports()
+        with patch.object(
+            monitor.serial_handler,
+            "get_available_ports",
+            return_value=["/dev/ttyUSB0", "/dev/ttyUSB1"],
+        ):
+            monitor.refresh_ports()
+
+        assert monitor.port_combo.currentText() == "/dev/ttyUSB1"
+
+    def test_device_removal_prints_single_message(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.connection_mode = ConnectionMode.SERIAL.value
+
+        monitor._on_connection_error(
+            ConnectionMode.SERIAL.value,
+            TransportError(
+                TransportOperation.READ,
+                "device gone",
+                "/dev/ttyUSB0",
+                DisconnectReason.DEVICE_REMOVED,
+            ),
+            False,
+        )
+
+        text = monitor.terminal_display.toPlainText()
+        assert "device gone" not in text
+
     def test_checksum_preview_matches_transmitted_byte(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)

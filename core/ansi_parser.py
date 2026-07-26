@@ -21,7 +21,13 @@ class AnsiParser:
 
     def setup(self) -> None:
         """初始化解析器"""
-        self.ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+        # OSC/DCS/SOS/PM/APC 控制串（到 BEL 或 ST 结束）也必须被消费，否则会显示为正文
+        self.ansi_escape = re.compile(
+            r"\x1B(?:\[[0-?]*[ -/]*[@-~]"
+            r"|][^\x07\x1B]*(?:\x07|\x1B\\)?"
+            r"|[P^_X][^\x1B]*(?:\x1B\\)?"
+            r"|[@-Z\\-_])"
+        )
         self.ansi_color_pattern = re.compile(r"\x1B\[([0-9;]*)m")
 
         self.fg_colors: dict[str, QColor] = {
@@ -101,6 +107,10 @@ class AnsiParser:
             return
 
         codes = code.split(";")
+        # 零填充参数（如 ESC[01;31m）与未填充等价，必须归一化
+        codes = [
+            str(int(part)) if part.isdigit() else part for part in codes
+        ]
 
         i = 0
         while i < len(codes):
@@ -191,12 +201,15 @@ class AnsiParser:
         result: list[tuple[str, QTextCharFormat]] = []
         last_pos = 0
 
-        for match in self.ansi_color_pattern.finditer(text):
+        for match in self.ansi_escape.finditer(text):
             if match.start() > last_pos:
                 plain_text = text[last_pos : match.start()]
                 result.append((plain_text, QTextCharFormat(self.current_format)))
 
-            self.parse_code(match.group(1) + "m")
+            sgr = self.ansi_color_pattern.fullmatch(match.group(0))
+            if sgr is not None:
+                self.parse_code(sgr.group(1) + "m")
+            # 非 SGR 序列（光标控制、OSC/DCS 等）直接丢弃，不进入正文
             last_pos = match.end()
 
         if last_pos < len(text):

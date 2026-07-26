@@ -93,6 +93,9 @@ class QuickSendManager:
         if result.accepted:
             return
         if result.status is SendStatus.NOT_CONNECTED:
+            # 顺序发送时先停队列，否则每个待发项都会弹一个模态框
+            if self.panel:
+                self.panel.stop_sequence_send()
             QMessageBox.warning(
                 self.main_window,
                 self.main_window.t("warning"),
@@ -118,6 +121,8 @@ class QuickSendManager:
     def close(self) -> None:
         """关闭面板"""
         if self.panel:
+            # 定时器不随 close() 停止，会在窗口关闭后继续发送
+            self.panel.stop_sequence_send()
             self.panel.close()
 
     def save_settings(self) -> None:

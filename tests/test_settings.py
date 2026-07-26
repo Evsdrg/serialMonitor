@@ -113,6 +113,18 @@ def test_out_of_range_integers_fall_back():
     assert settings.trim_batch_lines == 800
 
 
+def test_future_schema_version_keeps_connections():
+    settings = AppSettings.from_dict(
+        {
+            "schema_version": 3,
+            "connections": {"tcp": {"host": "10.0.0.5", "port": 4001}},
+        }
+    )
+
+    assert settings.tcp.host == "10.0.0.5"
+    assert settings.tcp.port == 4001
+
+
 def test_non_finite_network_timeout_falls_back():
     settings = AppSettings.from_dict(
         {

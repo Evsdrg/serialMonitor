@@ -25,6 +25,31 @@ def manager(main_window):
     return QuickSendManager(main_window)
 
 
+class TestQuickSendLifecycle:
+    """P1: 关闭必须停掉顺序发送定时器；断连时不得弹出模态风暴"""
+
+    def test_close_stops_sequence_timer(self, manager):
+        panel = MagicMock()
+        manager.panel = panel
+
+        manager.close()
+
+        panel.stop_sequence_send.assert_called_once()
+        panel.close.assert_called_once()
+
+    def test_disconnected_send_stops_sequence(self, manager, main_window):
+        panel = MagicMock()
+        manager.panel = panel
+        main_window.send_payload.return_value = SendResult(SendStatus.NOT_CONNECTED)
+
+        with patch("ui.quick_send_manager.QMessageBox.warning") as warning:
+            manager.send_item("AT", False, False)
+
+        # 首次失败即停队列，后续待发项不会再各弹一个模态框
+        panel.stop_sequence_send.assert_called_once()
+        assert warning.call_count == 1
+
+
 class TestQuickSendManagerInit:
     def test_initial_panel_none(self, manager):
         assert manager.panel is None

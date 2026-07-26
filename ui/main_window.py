@@ -739,6 +739,12 @@ class SerialMonitor(QMainWindow):
                     )
 
         self.trim_menu_button.setMenu(menu)
+        # 旧菜单不会随 setMenu 释放，必须显式销毁，否则每次切换语言/主题都泄漏
+        previous = getattr(self, "_trim_menu", None)
+        if previous is not None and previous is not menu:
+            previous.setParent(None)
+            previous.deleteLater()
+        self._trim_menu = menu
 
     def _set_trim_enabled(self, enabled: bool) -> None:
         self.trim_manager.enabled = enabled
@@ -955,6 +961,10 @@ class SerialMonitor(QMainWindow):
             self.terminal_emulator.enable_ansi_colors = self.enable_ansi_colors
             self.terminal_emulator.resize_to_fit()
             self.terminal_emulator.setFocus()
+        else:
+            # 离开终端模式时清掉残留高亮，否则下次进入仍显示旧匹配
+            self.terminal_emulator.search_highlight = None
+            self.terminal_emulator._dirty = True
 
         self.update_texts()
 
@@ -1109,9 +1119,27 @@ class SerialMonitor(QMainWindow):
     # ── 连接操作 ─────────────────────────────────────────────
 
     def refresh_ports(self) -> None:
+        # 刷新不得丢掉用户选择：设备短暂消失再回来时应恢复原选择。
+        # 只有当前值不是上次由刷新自身落下的回退值时，才视为用户选择。
+        current = self.port_combo.currentText()
+        if current and current != getattr(self, "_auto_selected_port", ""):
+            self._preferred_port = current
+        preferred = getattr(self, "_preferred_port", "")
+
+        self.port_combo.blockSignals(True)
         self.port_combo.clear()
         for port in self.serial_handler.get_available_ports():
             self.port_combo.addItem(port)
+        restored = False
+        if preferred:
+            index = self.port_combo.findText(preferred)
+            if index >= 0:
+                self.port_combo.setCurrentIndex(index)
+                restored = True
+        self.port_combo.blockSignals(False)
+        self._auto_selected_port = (
+            "" if restored else self.port_combo.currentText()
+        )
 
     def toggle_connection(self) -> None:
         if self.is_connection_active():
@@ -1391,7 +1419,11 @@ class SerialMonitor(QMainWindow):
     def _on_connection_error(
         self, mode: str, error: TransportError, interactive: bool
     ) -> None:
-        if mode != self.connection_mode or error.reason is DisconnectReason.REMOTE:
+        if mode != self.connection_mode or error.reason in (
+            DisconnectReason.REMOTE,
+            # 设备移除由断开消息统一播报，避免同一事件打印两条
+            DisconnectReason.DEVICE_REMOVED,
+        ):
             return
 
         if error.operation is TransportOperation.CONNECT:
@@ -1510,6 +1542,8 @@ class SerialMonitor(QMainWindow):
     def clear_receive_area(self) -> None:
         if self.terminal_mode:
             self.terminal_emulator.clear_screen()
+            # 终端模式的历史镜像在隐藏文档里，必须一并清除
+            self.terminal_display.clear()
         else:
             self.terminal_display.clear()
 
