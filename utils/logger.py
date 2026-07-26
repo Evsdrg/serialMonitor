@@ -31,6 +31,22 @@ def get_log_dir() -> Path:
     return base / suffix
 
 
+def _prepare_log_dir() -> Path | None:
+    """创建日志目录；首选目录不可用时回退临时目录，全部失败返回 None。"""
+    candidates = [get_log_dir()]
+    fallback = Path(tempfile.gettempdir()) / candidates[0].name
+    if fallback != candidates[0]:
+        candidates.append(fallback)
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        return candidate
+    return None
+
+
 def setup_logging(
     level: int = logging.INFO,
     max_bytes: int = 5 * 1024 * 1024,
@@ -46,11 +62,10 @@ def setup_logging(
     Returns:
         配置好的根日志器
     """
-    log_dir = get_log_dir()
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = _prepare_log_dir()
 
     session = datetime.now().strftime("%Y%m%d")
-    log_file = log_dir / f"serialmonitor_{session}.log"
+    log_file = log_dir / f"serialmonitor_{session}.log" if log_dir else None
 
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
@@ -65,20 +80,21 @@ def setup_logging(
 
     console_formatter = logging.Formatter("%(levelname)s: %(name)s - %(message)s")
 
-    try:
-        from logging.handlers import RotatingFileHandler
+    if log_file is not None:
+        try:
+            from logging.handlers import RotatingFileHandler
 
-        file_handler = RotatingFileHandler(
-            log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(level)
-        file_handler.setFormatter(file_formatter)
-        root_logger.addHandler(file_handler)
-    except OSError as e:
-        root_logger.warning("Failed to setup file logging: %s", e)
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(level)
+            file_handler.setFormatter(file_formatter)
+            root_logger.addHandler(file_handler)
+        except OSError as e:
+            root_logger.warning("Failed to setup file logging: %s", e)
 
     if os.environ.get("DEBUG"):
         console_handler = logging.StreamHandler(sys.stderr)

@@ -112,14 +112,30 @@ class TerminalTrimManager:
         self.max_lines: int = self.DEFAULT_MAX_LINES
         self.batch_lines: int = self.DEFAULT_BATCH_LINES
 
-        self._log_dir = self._get_log_dir()
-        self._log_dir.mkdir(parents=True, exist_ok=True)
+        self._log_dir = self._prepare_log_dir()
         session = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file = self._log_dir / f"trimmed_{session}_{os.getpid()}.log"
 
     @property
     def log_dir(self) -> Path:
         return self._log_dir
+
+    def _prepare_log_dir(self) -> Path:
+        """准备裁剪日志目录：拒绝符号链接，失败则回退到私有临时目录。"""
+        preferred = self._get_log_dir()
+        try:
+            preferred.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if preferred.is_dir() and not preferred.is_symlink():
+                return preferred
+            logger.warning("Trim log dir is not a regular directory: %s", preferred)
+        except OSError as e:
+            logger.warning("Failed to create trim log dir %s: %s", preferred, e)
+
+        try:
+            return Path(tempfile.mkdtemp(prefix="SerialMonitorTrimmedLogs_"))
+        except OSError as e:
+            logger.error("Failed to create fallback trim log dir: %s", e)
+            return preferred
 
     def _get_log_dir(self) -> Path:
         base = Path(tempfile.gettempdir())
@@ -134,8 +150,15 @@ class TerminalTrimManager:
     def _append_log(self, text: str) -> bool:
         if not text:
             return True
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            with self._log_file.open("a", encoding="utf-8", errors="replace") as f:
+            fd = os.open(self._log_file, flags, 0o600)
+        except OSError as e:
+            logger.warning("Failed to open trim log: %s", e)
+            return False
+        try:
+            with os.fdopen(fd, "a", encoding="utf-8", errors="replace") as f:
                 f.write(text)
             return True
         except OSError as e:

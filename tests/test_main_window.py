@@ -341,6 +341,46 @@ class TestSerialMonitorLifecycle:
         assert monitor.device_check_timer.isActive() is True
 
 
+class TestTrimManagerLogDir:
+    def test_unusable_log_dir_falls_back(self, tmp_path):
+        blocked = tmp_path / "blocked"
+        blocked.write_text("not a directory", encoding="utf-8")
+
+        with patch.object(
+            TerminalTrimManager, "_get_log_dir", return_value=blocked
+        ):
+            manager = TerminalTrimManager()
+
+        assert manager.log_dir.is_dir()
+
+    def test_symlinked_log_dir_is_not_used(self, tmp_path):
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(victim, target_is_directory=True)
+
+        with patch.object(TerminalTrimManager, "_get_log_dir", return_value=link):
+            manager = TerminalTrimManager()
+
+        assert manager.log_dir.resolve() != victim.resolve()
+
+    def test_log_file_symlink_is_not_followed(self, tmp_path):
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        victim = tmp_path / "victim.txt"
+        victim.write_text("original", encoding="utf-8")
+
+        with patch.object(
+            TerminalTrimManager, "_get_log_dir", return_value=log_dir
+        ):
+            manager = TerminalTrimManager()
+
+        manager._log_file.symlink_to(victim)
+
+        assert manager._append_log("secret payload") is False
+        assert victim.read_text(encoding="utf-8") == "original"
+
+
 class TestSerialMonitorDataProcessing:
     def test_append_to_terminal_plain(self, qtbot):
         monitor = SerialMonitor()

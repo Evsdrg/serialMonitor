@@ -26,6 +26,34 @@ class TestGetLogDir:
         assert "SerialMonitorLogs" in log_dir.name
 
 
+class TestLogDirFailures:
+    def test_setup_logging_survives_unwritable_dir(self, tmp_path):
+        blocked = tmp_path / "blocked"
+        blocked.write_text("not a directory", encoding="utf-8")
+        root = logging.getLogger()
+        original_handlers = list(root.handlers)
+        root.handlers = []
+
+        try:
+            with patch("utils.logger.get_log_dir", return_value=blocked / "logs"):
+                logger = setup_logging()
+            assert logger.name == "root"
+        finally:
+            for handler in list(root.handlers):
+                handler.close()
+            root.handlers = original_handlers
+
+    def test_pyinstaller_log_dir_is_next_to_executable(self):
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "_MEIPASS", "/tmp/meipass", create=True),
+            patch.object(sys, "executable", "/opt/app/SerialMonitor"),
+        ):
+            log_dir = get_log_dir()
+
+        assert log_dir.parent == Path("/opt/app")
+
+
 class TestSetupLogging:
     def test_returns_root_logger(self):
         logger = setup_logging()
