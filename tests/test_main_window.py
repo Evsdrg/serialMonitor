@@ -503,6 +503,36 @@ class TestSerialMonitorDataProcessing:
         assert "cmd" in monitor.statusBar().currentMessage()
         assert monitor.terminal_display.toPlainText() == doc_before
 
+    def test_checksum_end_mode_survives_startup_and_save(self, qtbot):
+        with patch(
+            "ui.main_window.ConfigManager.load_app_settings",
+            return_value=AppSettings(checksum_end_mode=3),
+        ):
+            monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+
+        assert monitor.checksum_end_combo.currentIndex() == 3
+
+        saved: list = []
+        with patch(
+            "ui.main_window.ConfigManager.save_app_settings",
+            side_effect=lambda s: saved.append(s),
+        ):
+            monitor.save_settings()
+
+        assert saved and saved[0].checksum_end_mode == 3
+
+    def test_checksum_end_mode_survives_language_toggle(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.checksum_end_combo.setCurrentIndex(4)
+
+        monitor.language = "en" if monitor.language == "zh" else "zh"
+        monitor.update_texts()
+
+        assert monitor.checksum_end_combo.count() == 5
+        assert monitor.checksum_end_combo.currentIndex() == 4
+
     def test_load_settings_restores_terminal_mode(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)

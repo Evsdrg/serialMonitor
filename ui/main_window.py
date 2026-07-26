@@ -434,6 +434,8 @@ class SerialMonitor(QMainWindow):
         self.checksum_start_spinbox.setFixedWidth(60)
         self.checksum_to_label = QLabel()
         self.checksum_end_combo = QComboBox()
+        # 先建立条目，否则 load_settings() 在 update_texts() 之前恢复索引会失效
+        self.checksum_end_combo.addItems(self._checksum_end_labels())
         self.checksum_label = QLabel()
         self.checksum_input = QLineEdit()
         self.checksum_input.setReadOnly(True)
@@ -537,6 +539,24 @@ class SerialMonitor(QMainWindow):
         app.setStyleSheet(stylesheet + custom_style)
         self._rebuild_trim_menu()
 
+    def _checksum_end_labels(self) -> list[str]:
+        """校验和结束位置下拉框的当前语言文本。"""
+        if self.language == "zh":
+            return [
+                "末尾（无帧尾）",
+                "-1（1字节帧尾）",
+                "-2（2字节帧尾）",
+                "-3（3字节帧尾）",
+                "-4（4字节帧尾）",
+            ]
+        return [
+            "End (no tail)",
+            "-1 (1B tail)",
+            "-2 (2B tail)",
+            "-3 (3B tail)",
+            "-4 (4B tail)",
+        ]
+
     def update_texts(self) -> None:
         # 更新主题下拉框文本
         idx = self.theme_combo.currentIndex()
@@ -619,30 +639,17 @@ class SerialMonitor(QMainWindow):
         self.checksum_range_label.setText(self.t("checksum_range"))
         self.checksum_to_label.setText(self.t("checksum_to"))
 
-        ck_idx = self.checksum_end_combo.currentIndex()
-        self.checksum_end_combo.clear()
-        if self.language == "zh":
-            self.checksum_end_combo.addItems(
-                [
-                    "末尾（无帧尾）",
-                    "-1（1字节帧尾）",
-                    "-2（2字节帧尾）",
-                    "-3（3字节帧尾）",
-                    "-4（4字节帧尾）",
-                ]
-            )
+        # 原地改写条目文本，避免 clear() 丢失当前选择
+        labels = self._checksum_end_labels()
+        if self.checksum_end_combo.count() != len(labels):
+            ck_idx = self.checksum_end_combo.currentIndex()
+            self.checksum_end_combo.clear()
+            self.checksum_end_combo.addItems(labels)
+            if ck_idx >= 0:
+                self.checksum_end_combo.setCurrentIndex(ck_idx)
         else:
-            self.checksum_end_combo.addItems(
-                [
-                    "End (no tail)",
-                    "-1 (1B tail)",
-                    "-2 (2B tail)",
-                    "-3 (3B tail)",
-                    "-4 (4B tail)",
-                ]
-            )
-        if ck_idx >= 0:
-            self.checksum_end_combo.setCurrentIndex(ck_idx)
+            for index, text in enumerate(labels):
+                self.checksum_end_combo.setItemText(index, text)
 
         self.checksum_label.setText(self.t("checksum"))
         self.calculate_checksum_button.setText(self.t("calculate_checksum"))
