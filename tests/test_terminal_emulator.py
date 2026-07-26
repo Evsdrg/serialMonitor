@@ -1130,6 +1130,22 @@ class TestTerminalResize:
         # 过小尺寸钳制为 1x1
         assert term._fit_dimensions(1, 1) == (1, 1)
 
+    def test_hidden_widget_does_not_resize_grid(self, qtbot):
+        term = TerminalEmulator(rows=20, cols=40)
+        qtbot.addWidget(term)
+        term.show()
+        qtbot.waitUntil(lambda: term.viewport().width() > 0)
+        term.process_bytes(b"hi")
+        rows_when_visible = term.rows
+        row_of_content = term.cursor_row
+        term.hide()
+
+        term.resize(80, 40)
+        term.resize_to_fit()
+
+        assert term.rows == rows_when_visible
+        assert "".join(c.char for c in term.grid[row_of_content]).strip() == "hi"
+
     def test_resize_event_updates_dimensions(self, qtbot):
         term = TerminalEmulator(rows=2, cols=5)
         qtbot.addWidget(term)

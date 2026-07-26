@@ -206,8 +206,19 @@ class TerminalEmulator(QTextEdit):
             self.cursor_row += rows - self.rows
         elif rows < self.rows:
             drop = self.rows - rows
-            self.grid = self.grid[drop:]
-            self.cursor_row -= drop
+            # 优先丢弃光标下方的空白行，避免缩小窗口时抹掉已有输出
+            spare = 0
+            for index in range(len(self.grid) - 1, self.cursor_row, -1):
+                if any(cell.char != " " for cell in self.grid[index]):
+                    break
+                spare += 1
+            drop_bottom = min(drop, spare)
+            if drop_bottom:
+                del self.grid[len(self.grid) - drop_bottom :]
+            drop_top = drop - drop_bottom
+            if drop_top:
+                self.grid = self.grid[drop_top:]
+                self.cursor_row -= drop_top
 
         self.rows = rows
         self.cols = cols
@@ -233,7 +244,9 @@ class TerminalEmulator(QTextEdit):
         return rows, cols
 
     def resize_to_fit(self) -> None:
-        """按当前视口尺寸调整网格。"""
+        """按当前视口尺寸调整网格；隐藏时不调整，避免布局回收尺寸导致内容丢失。"""
+        if not self.isVisible():
+            return
         margin = self.document().documentMargin()
         width = max(0, int(self.viewport().width() - 2 * margin))
         height = max(0, int(self.viewport().height() - 2 * margin))

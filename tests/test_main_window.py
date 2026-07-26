@@ -587,6 +587,21 @@ class TestSerialMonitorDataProcessing:
         assert monitor.checksum_end_combo.count() == 5
         assert monitor.checksum_end_combo.currentIndex() == 4
 
+    def test_terminal_content_survives_mode_round_trip(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.show()
+        monitor.toggle_terminal_mode()
+        monitor._on_serial_data(b"device says hello")
+
+        monitor.toggle_terminal_mode()
+        monitor.toggle_terminal_mode()
+
+        grid_text = "".join(
+            c.char for row in monitor.terminal_emulator.grid for c in row
+        )
+        assert "device says hello" in grid_text
+
     def test_load_settings_restores_terminal_mode(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
