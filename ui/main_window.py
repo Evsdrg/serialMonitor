@@ -1586,6 +1586,9 @@ class SerialMonitor(QMainWindow):
         checksum_start = self.checksum_start_spinbox.value()
         checksum_end_mode = self.checksum_end_combo.currentIndex()
 
+        # 与实际发送保持一致：校验和覆盖行尾符
+        byte_values += (self.line_ending_combo.currentData() or "").encode("utf-8")
+
         if auto_checksum:
             res = apply_checksum(
                 byte_values,

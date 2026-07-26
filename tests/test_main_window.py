@@ -587,6 +587,36 @@ class TestSerialMonitorDataProcessing:
         assert monitor.checksum_end_combo.count() == 5
         assert monitor.checksum_end_combo.currentIndex() == 4
 
+    def test_checksum_preview_matches_transmitted_byte(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.send_hex_mode = False
+        monitor.send_input.setText("AT")
+        monitor.auto_checksum_checkbox.setChecked(True)
+        monitor.checksum_start_spinbox.setValue(1)
+        monitor.checksum_end_combo.setCurrentIndex(0)
+        index = monitor.line_ending_combo.findData("\r\n")
+        assert index >= 0
+        monitor.line_ending_combo.setCurrentIndex(index)
+
+        monitor.calculate_checksum()
+        preview = monitor.checksum_input.text()
+
+        sent: list[bytes] = []
+        with (
+            patch.object(monitor, "is_connected", return_value=True),
+            patch.object(
+                monitor.payload_sender,
+                "_writer",
+                side_effect=lambda payload: sent.append(payload) or True,
+            ),
+            patch.object(monitor.payload_sender, "_is_connected", return_value=True),
+        ):
+            monitor.send_data()
+
+        assert sent, "payload was not sent"
+        assert f"{sent[0][-1]:02X}" in preview
+
     def test_terminal_content_survives_mode_round_trip(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
