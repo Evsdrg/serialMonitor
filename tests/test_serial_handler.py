@@ -559,22 +559,40 @@ class TestSerialHandlerClosePath:
         mock_thread.wait.assert_called_once_with(1000)
         assert handler._reader_thread is None
 
-    def test_close_keeps_reader_reference_when_thread_does_not_stop(self):
+    def test_close_releases_port_when_reader_never_stops(self):
         handler = SerialHandler()
         mock_port = Mock()
         mock_port.is_open = True
         mock_thread = Mock()
         mock_thread.wait.return_value = False
         handler.serial_port = mock_port
+        handler.current_port = "/dev/ttyUSB0"
+        handler._state = TransportState.CONNECTED
         handler._reader_thread = mock_thread
 
-        assert handler.close() is False
+        assert handler.close() is True
 
-        assert handler._reader_thread is mock_thread
-        assert handler.serial_port is mock_port
-        mock_port.close.assert_not_called()
+        mock_port.close.assert_called_once()
+        assert handler.serial_port is None
+        assert handler._reader_thread is None
+        assert handler.state is TransportState.DISCONNECTED
 
-    def test_shutdown_retries_reader_before_closing_port(self):
+    def test_shutdown_succeeds_when_reader_never_stops(self):
+        handler = SerialHandler()
+        mock_port = Mock()
+        mock_port.is_open = True
+        mock_thread = Mock()
+        mock_thread.wait.return_value = False
+        handler.serial_port = mock_port
+        handler.current_port = "/dev/ttyUSB0"
+        handler._state = TransportState.CONNECTED
+        handler._reader_thread = mock_thread
+
+        assert handler.shutdown(timeout_ms=3000) is True
+        assert handler.state is TransportState.DISCONNECTED
+        assert handler.serial_port is None
+
+    def test_close_port_release_unblocks_reader(self):
         handler = SerialHandler()
         mock_port = Mock()
         mock_port.is_open = True
@@ -582,14 +600,14 @@ class TestSerialHandlerClosePath:
         mock_thread.wait.side_effect = [False, True]
         handler.serial_port = mock_port
         handler.current_port = "/dev/ttyUSB0"
+        handler._state = TransportState.CONNECTED
         handler._reader_thread = mock_thread
 
-        assert handler.shutdown(timeout_ms=3000) is True
+        assert handler.close() is True
 
-        assert mock_thread.wait.call_args_list == [call(1000), call(2000)]
         mock_port.close.assert_called_once()
         assert handler._reader_thread is None
-        assert handler.serial_port is None
+        assert handler.state is TransportState.DISCONNECTED
 
     def test_on_reader_error_closes_and_emits(self, qtbot):
         handler = SerialHandler()

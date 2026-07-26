@@ -66,6 +66,7 @@ class SerialHandler(TransportHandler):
         self.current_port: Optional[str] = None
         self._target_port: Optional[str] = None
         self._reader_thread: Optional[_SerialReadThread] = None
+        self._orphan_readers: list[_SerialReadThread] = []
 
     @property
     def endpoint(self) -> str:
@@ -167,7 +168,9 @@ class SerialHandler(TransportHandler):
             return False
 
     def _start_reader(self) -> None:
-        self._stop_reader()
+        if not self._stop_reader():
+            # 旧线程无法停止时必须脱离，否则会被静默覆盖并泄漏
+            self._detach_reader()
         if not self.serial_port:
             return
         self._reader_thread = _SerialReadThread(self.serial_port)
@@ -196,6 +199,36 @@ class SerialHandler(TransportHandler):
         self._reader_thread = None
         return True
 
+    def _detach_reader(self) -> None:
+        """放弃无法停止的读取线程：断开信号并保留引用直到它自行结束。"""
+        reader = self._reader_thread
+        if reader is None:
+            return
+        for signal, slot in (
+            (reader.session_data_received, self._on_reader_data),
+            (reader.session_error_occurred, self._on_reader_error),
+        ):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        try:
+            reader.stop()
+        except RuntimeError:
+            pass
+        self._orphan_readers.append(reader)
+        try:
+            reader.finished.connect(
+                lambda r=reader: self._forget_orphan_reader(r)
+            )
+        except (AttributeError, RuntimeError):
+            pass
+        self._reader_thread = None
+
+    def _forget_orphan_reader(self, reader: object) -> None:
+        if reader in self._orphan_readers:
+            self._orphan_readers.remove(reader)
+
     def _on_reader_data(self, reader: object, data: bytes) -> None:
         if reader is self._reader_thread and self._state is TransportState.CONNECTED:
             self.data_received.emit(data)
@@ -220,10 +253,9 @@ class SerialHandler(TransportHandler):
         if self._state is TransportState.DISCONNECTED and self.serial_port is None:
             return True
         self._transition(TransportState.CLOSING)
-        if not self._stop_reader():
-            if self.last_error:
-                self._emit_error(TransportOperation.SHUTDOWN, self.last_error)
-            return False
+        stopped = self._stop_reader()
+
+        # 关闭端口本身就是解阻塞读取的手段，无论线程是否已停止都必须执行
         if self.serial_port:
             try:
                 if self.serial_port.is_open:
@@ -232,16 +264,16 @@ class SerialHandler(TransportHandler):
                 logger.warning("Error closing serial port: %s", e)
 
             self.serial_port = None
+
+        if not stopped and not self._stop_reader(500):
+            self._detach_reader()
+            if self.last_error:
+                self._emit_error(TransportOperation.SHUTDOWN, self.last_error)
+
         self._transition(TransportState.DISCONNECTED, reason)
         return True
 
     def shutdown(self, timeout_ms: int = 3000) -> bool:
-        if self.close(reason=DisconnectReason.SHUTDOWN):
-            return True
-
-        remaining_ms = max(0, timeout_ms - 1000)
-        if remaining_ms == 0 or not self._stop_reader(remaining_ms):
-            return False
         return self.close(reason=DisconnectReason.SHUTDOWN)
 
     def set_dtr(self, level: bool) -> bool:
