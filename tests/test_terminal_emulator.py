@@ -338,6 +338,22 @@ class TestTerminalEmulatorKeyboard:
         assert received == ["你好".encode("utf-8")]
 
 
+class TestTabKey:
+    def test_tab_is_sent_to_device(self, qtbot):
+        term = TerminalEmulator(rows=5, cols=20)
+        qtbot.addWidget(term)
+        term.show()
+        term.setFocus()
+        sent: list[bytes] = []
+        term.key_pressed.connect(sent.append)
+
+        qtbot.keyClick(term, Qt.Key.Key_Tab)
+
+        assert sent == [b"\t"]
+        # Tab 不得被用于焦点切换
+        assert term.focusNextPrevChild(True) is False
+
+
 class TestPasteConfirmation:
     def _paste(self, qtbot, term):
         qtbot.keyClick(

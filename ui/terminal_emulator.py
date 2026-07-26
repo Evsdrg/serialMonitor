@@ -254,6 +254,10 @@ class TerminalEmulator(QTextEdit):
         if (rows, cols) != (self.rows, self.cols):
             self.resize_grid(rows, cols)
 
+    def focusNextPrevChild(self, next: bool) -> bool:  # noqa: A002
+        """终端独占 Tab：只读 QTextEdit 默认会用 Tab 切换焦点，这里禁止。"""
+        return False
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.resize_to_fit()
