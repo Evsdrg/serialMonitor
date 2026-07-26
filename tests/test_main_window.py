@@ -314,7 +314,7 @@ class TestSerialMonitorLifecycle:
         monitor.closeEvent(event)
         event.accept.assert_called_once()
 
-    def test_close_event_ignores_when_rfc2217_worker_does_not_stop(self, qtbot):
+    def test_close_event_accepts_when_rfc2217_worker_does_not_stop(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
         monitor.rfc2217_handler = Mock()
@@ -323,22 +323,36 @@ class TestSerialMonitorLifecycle:
 
         monitor.closeEvent(event)
 
-        event.ignore.assert_called_once()
-        event.accept.assert_not_called()
-        assert monitor.device_check_timer.isActive() is True
+        event.accept.assert_called_once()
+        event.ignore.assert_not_called()
+        assert monitor.device_check_timer.isActive() is False
 
-    def test_close_event_ignores_when_serial_reader_does_not_stop(self, qtbot):
+    def test_close_event_accepts_when_serial_reader_does_not_stop(self, qtbot):
         monitor = SerialMonitor()
         qtbot.addWidget(monitor)
         monitor.serial_handler = Mock()
         monitor.serial_handler.shutdown.return_value = False
+        monitor.quick_send_manager = Mock()
         event = Mock()
 
         monitor.closeEvent(event)
 
-        event.ignore.assert_called_once()
-        event.accept.assert_not_called()
-        assert monitor.device_check_timer.isActive() is True
+        event.accept.assert_called_once()
+        event.ignore.assert_not_called()
+        assert monitor.device_check_timer.isActive() is False
+        monitor.quick_send_manager.close.assert_called_once()
+
+    def test_close_event_saves_settings_once(self, qtbot):
+        monitor = SerialMonitor()
+        qtbot.addWidget(monitor)
+        monitor.rfc2217_handler = Mock()
+        monitor.rfc2217_handler.shutdown.return_value = False
+        event = Mock()
+
+        with patch.object(monitor, "save_settings") as save_mock:
+            monitor.closeEvent(event)
+
+        save_mock.assert_called_once()
 
 
 class TestTrimManagerLogDir:

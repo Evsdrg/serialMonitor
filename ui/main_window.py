@@ -1696,16 +1696,11 @@ class SerialMonitor(QMainWindow):
             mode.value for mode in ConnectionMode
         )
         self.close_connection(silent=True)
+        # 关闭不可被传输层否决：无法停止的后台任务只记录，不阻止用户退出
         if not self.rfc2217_handler.shutdown(timeout_ms=3000):
-            self._closing = False
-            self._silent_disconnect_modes.clear()
-            event.ignore()
-            return
+            logger.warning("RFC2217 worker did not stop before close")
         if not self.serial_handler.shutdown(timeout_ms=1500):
-            self._closing = False
-            self._silent_disconnect_modes.clear()
-            event.ignore()
-            return
+            logger.warning("Serial reader did not stop before close")
         self.device_check_timer.stop()
         self.socket_handler.shutdown(timeout_ms=1000)
         self.quick_send_manager.close()
