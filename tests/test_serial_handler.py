@@ -2,11 +2,14 @@
 测试 core/serial_handler.py - 静态方法和基础功能
 """
 
+import time
+
 import pytest
+import serial
 from unittest.mock import MagicMock, Mock, call, patch
 
 from core.serial_handler import SerialHandler
-from core.transport import TransportState
+from core.transport import TransportOperation, TransportState
 
 
 class TestSerialHandlerStatic:
@@ -124,7 +127,7 @@ class TestSerialHandlerInstance:
         assert handler.current_port == "/dev/ttyUSB0"
         assert handler.is_open() is True
         mock_serial_class.assert_called_once()
-        assert mock_serial_class.call_args.kwargs["write_timeout"] == 1.0
+        assert mock_serial_class.call_args.kwargs["write_timeout"] == 5.0
 
     def test_open_failure_emits_error(self, qtbot):
         import serial
@@ -264,11 +267,13 @@ class TestSerialHandlerInstance:
         handler.serial_port = mock_port
         handler._state = TransportState.CONNECTED
 
-        with qtbot.waitSignal(handler.error_occurred, timeout=1000) as blocker:
+        with qtbot.waitSignal(handler.error_occurred, timeout=2000) as blocker:
             result = handler.write_data(b"hello")
 
-        assert result is False
+        # 写入已被接受，部分写入通过异步错误反馈
+        assert result is True
         assert "2 of 5" in blocker.args[0]
+        handler.close()
 
     def test_write_data_when_closed(self):
         handler = SerialHandler()
@@ -285,9 +290,10 @@ class TestSerialHandlerInstance:
         mock_serial_class.return_value = mock_port
 
         handler.open("/dev/ttyUSB0")
-        with qtbot.waitSignal(handler.error_occurred, timeout=1000):
+        with qtbot.waitSignal(handler.error_occurred, timeout=2000):
             result = handler.write_data(b"hello")
-        assert result is False
+        assert result is True
+        handler.close()
 
     @patch("core.serial_handler.SerialHandler.get_available_ports")
     def test_check_device_exists_true(self, mock_get_ports):
@@ -502,6 +508,74 @@ class TestSerialReadThreadLifecycle:
         assert not thread.isRunning()
 
 
+class TestSerialWriteWorker:
+    def _connected_handler(self, write_impl):
+        handler = SerialHandler()
+        port = Mock()
+        port.is_open = True
+        port.write.side_effect = write_impl
+        handler.serial_port = port
+        handler.current_port = "/dev/ttyUSB0"
+        handler._state = TransportState.CONNECTED
+        handler._start_writer()
+        return handler, port
+
+    def test_slow_write_does_not_block_caller(self, qtbot):
+        def slow_write(data):
+            time.sleep(0.6)
+            return len(data)
+
+        handler, _port = self._connected_handler(slow_write)
+        try:
+            started = time.monotonic()
+            assert handler.write_data(b"payload") is True
+            elapsed = time.monotonic() - started
+
+            assert elapsed < 0.3
+            assert handler.has_pending_writes() is True
+        finally:
+            handler.close()
+
+    def test_fast_write_reports_completed(self, qtbot):
+        handler, port = self._connected_handler(lambda data: len(data))
+        try:
+            assert handler.write_data(b"ok") is True
+            assert handler.has_pending_writes() is False
+            port.write.assert_called_once_with(b"ok")
+        finally:
+            handler.close()
+
+    def test_write_error_is_reported_asynchronously(self, qtbot):
+        def failing_write(data):
+            raise serial.SerialException("write failed")
+
+        handler, _port = self._connected_handler(failing_write)
+        try:
+            with qtbot.waitSignal(handler.transport_error, timeout=2000) as blocker:
+                handler.write_data(b"x")
+            error = blocker.args[0]
+            assert error.operation is TransportOperation.WRITE
+            assert "write failed" in error.message
+        finally:
+            handler.close()
+
+    def test_close_drains_queued_writes(self, qtbot):
+        sent: list[bytes] = []
+
+        def recording_write(data):
+            time.sleep(0.2)
+            sent.append(data)
+            return len(data)
+
+        handler, _port = self._connected_handler(recording_write)
+        handler.write_data(b"first")
+        handler.write_data(b"last")
+
+        handler.close()
+
+        assert sent == [b"first", b"last"]
+
+
 class TestSerialHandlerClosePath:
     def test_close_no_port(self):
         handler = SerialHandler()
@@ -691,10 +765,11 @@ class TestSerialHandlerClosePath:
         handler.current_port = "/dev/ttyUSB0"
         handler._state = TransportState.CONNECTED
 
-        with qtbot.waitSignal(handler.error_occurred, timeout=1000) as blocker:
+        with qtbot.waitSignal(handler.error_occurred, timeout=2000) as blocker:
             result = handler.write_data(b"data")
-        assert result is False
+        assert result is True
         assert "write failed" in blocker.args[0]
+        handler.close()
 
     def test_get_available_ports_with_various(self):
         with patch("core.serial_handler.serial.tools.list_ports.comports") as mock_comports:

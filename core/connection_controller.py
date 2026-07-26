@@ -219,9 +219,10 @@ class ConnectionController(QObject):
         return self.write_payload(data) is not WriteDisposition.REJECTED
 
     def write_payload(self, data: bytes) -> WriteDisposition:
-        if not self.active_handler.write_data(data):
+        handler = self.active_handler
+        if not handler.write_data(data):
             return WriteDisposition.REJECTED
-        if self._mode is ConnectionMode.RFC2217:
+        if self._mode is ConnectionMode.RFC2217 or handler.has_pending_writes():
             return WriteDisposition.QUEUED
         return WriteDisposition.SENT
 

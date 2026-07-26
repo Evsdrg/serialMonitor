@@ -144,6 +144,11 @@ class SocketHandler(TransportHandler):
                 self._finish_disconnected(DisconnectReason.SHUTDOWN)
         return finished or self._state is TransportState.DISCONNECTED
 
+    def has_pending_writes(self) -> bool:
+        """Qt 写缓冲中是否仍有未真正发出的数据。"""
+        socket = self._socket
+        return socket is not None and socket.bytesToWrite() > 0
+
     def write_data(self, data: bytes) -> bool:
         if not self.is_open():
             return False

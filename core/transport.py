@@ -91,6 +91,10 @@ class TransportHandler(QObject):
     def write_data(self, data: bytes) -> bool:
         raise NotImplementedError
 
+    def has_pending_writes(self) -> bool:
+        """是否仍有数据在传输层排队未真正发出。"""
+        return False
+
     def _transition(
         self,
         state: TransportState,

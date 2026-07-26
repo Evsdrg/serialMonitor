@@ -7,6 +7,8 @@ Copyright (C) 2026 cpevor. Licensed under GPL v3.
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 from typing import Optional
 
 import serial
@@ -57,8 +59,76 @@ class _SerialReadThread(QThread):
                 return
 
 
+class _SerialWriteThread(QThread):
+    """后台串口写入线程（FIFO 队列，避免阻塞 GUI）。"""
+
+    session_error_occurred = pyqtSignal(object, str)
+
+    def __init__(self, serial_port: serial.Serial) -> None:
+        super().__init__()
+        self._serial_port = serial_port
+        self._queue: "queue.Queue[Optional[bytes]]" = queue.Queue()
+        self._lock = threading.Lock()
+        self._pending = 0
+        self._idle = threading.Event()
+        self._idle.set()
+
+    def enqueue(self, data: bytes) -> None:
+        with self._lock:
+            self._pending += len(data)
+        self._idle.clear()
+        self._queue.put(data)
+
+    def pending_bytes(self) -> int:
+        with self._lock:
+            return self._pending
+
+    def wait_idle(self, timeout_s: float) -> bool:
+        return self._idle.wait(timeout_s)
+
+    def stop(self, drain: bool = False) -> None:
+        if not drain:
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
+            with self._lock:
+                self._pending = 0
+            self._idle.set()
+        self._queue.put(None)
+
+    def run(self) -> None:  # noqa: D401
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            try:
+                written = self._serial_port.write(item)
+                if written is not None and written != len(item):
+                    self.session_error_occurred.emit(
+                        self,
+                        f"Serial write accepted {written} of {len(item)} bytes",
+                    )
+            except (OSError, serial.SerialException) as e:
+                self.session_error_occurred.emit(self, str(e))
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Unexpected error in serial write thread")
+                self.session_error_occurred.emit(self, str(e))
+            finally:
+                with self._lock:
+                    self._pending = max(0, self._pending - len(item))
+                    drained = self._pending == 0 and self._queue.empty()
+                if drained:
+                    self._idle.set()
+        self._idle.set()
+
+
 class SerialHandler(TransportHandler):
     """串口通信处理类"""
+
+    _WRITE_ACK_SECONDS = 0.05
+    _WRITE_DRAIN_SECONDS = 2.0
 
     def __init__(self) -> None:
         super().__init__()
@@ -67,6 +137,7 @@ class SerialHandler(TransportHandler):
         self._target_port: Optional[str] = None
         self._reader_thread: Optional[_SerialReadThread] = None
         self._orphan_readers: list[_SerialReadThread] = []
+        self._writer_thread: Optional[_SerialWriteThread] = None
 
     @property
     def endpoint(self) -> str:
@@ -145,7 +216,7 @@ class SerialHandler(TransportHandler):
                 stopbits=stopbits_map.get(stopbits, serial.STOPBITS_ONE),
                 bytesize=int(databits),
                 timeout=0.1,
-                write_timeout=1.0,
+                write_timeout=5.0,
             )
             serial_port.dtr = dtr
             serial_port.rts = rts
@@ -198,6 +269,34 @@ class SerialHandler(TransportHandler):
 
         self._reader_thread = None
         return True
+
+    def _start_writer(self) -> None:
+        self._stop_writer(drain=False)
+        if not self.serial_port:
+            return
+        self._writer_thread = _SerialWriteThread(self.serial_port)
+        self._writer_thread.session_error_occurred.connect(self._on_writer_error)
+        self._writer_thread.start()
+
+    def _stop_writer(self, drain: bool, timeout_ms: int = 1000) -> None:
+        writer = self._writer_thread
+        if writer is None:
+            return
+        if drain:
+            writer.wait_idle(self._WRITE_DRAIN_SECONDS)
+        writer.stop(drain=drain)
+        if not writer.wait(timeout_ms):
+            logger.warning("Serial writer thread did not stop")
+        try:
+            writer.session_error_occurred.disconnect(self._on_writer_error)
+        except (TypeError, RuntimeError):
+            pass
+        self._writer_thread = None
+
+    def _on_writer_error(self, writer: object, message: str) -> None:
+        if writer is not self._writer_thread:
+            return
+        self._emit_error(TransportOperation.WRITE, message)
 
     def _detach_reader(self) -> None:
         """放弃无法停止的读取线程：断开信号并保留引用直到它自行结束。"""
@@ -253,6 +352,8 @@ class SerialHandler(TransportHandler):
         if self._state is TransportState.DISCONNECTED and self.serial_port is None:
             return True
         self._transition(TransportState.CLOSING)
+        # 用户主动断开时排空写队列，应用退出/故障关闭则直接丢弃
+        self._stop_writer(drain=reason is DisconnectReason.USER)
         stopped = self._stop_reader()
 
         # 关闭端口本身就是解阻塞读取的手段，无论线程是否已停止都必须执行
@@ -299,28 +400,32 @@ class SerialHandler(TransportHandler):
         return True
 
     def write_data(self, data: bytes) -> bool:
-        """写入数据到串口。
+        """把数据交给写入线程。
 
         Args:
             data: 要发送的字节数据。
 
         Returns:
-            是否成功写入。
+            是否已被接受（写入结果通过 transport_error 异步反馈）。
         """
         if not self.is_open():
             return False
-
-        try:
-            written = self.serial_port.write(data)  # type: ignore[union-attr]
-            if written != len(data):
-                message = f"Serial write accepted {written} of {len(data)} bytes"
-                self._emit_error(TransportOperation.WRITE, message)
-                return False
-            self.last_error = None
-            return True
-        except (OSError, serial.SerialException) as e:
-            self._emit_error(TransportOperation.WRITE, str(e))
+        if self._writer_thread is None:
+            # 首次写入时才启动写线程，只读会话不占用线程
+            self._start_writer()
+        if self._writer_thread is None:
             return False
+
+        self.last_error = None
+        self._writer_thread.enqueue(data)
+        # 短暂等待，常见的小报文可在返回前完成，从而如实报告 SENT
+        self._writer_thread.wait_idle(self._WRITE_ACK_SECONDS)
+        return True
+
+    def has_pending_writes(self) -> bool:
+        """是否仍有数据排队等待写出。"""
+        writer = self._writer_thread
+        return writer is not None and writer.pending_bytes() > 0
 
     def check_device_exists(self) -> bool:
         """检查当前连接的设备是否还存在。"""
