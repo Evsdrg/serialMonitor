@@ -51,10 +51,15 @@ class ConfigManager:
         return cls._CONFIG_DIR, cls._SETTINGS_FILE, cls._QUICK_SEND_FILE  # type: ignore[return-value]
 
     @classmethod
-    def ensure_config_dir(cls) -> None:
-        """确保配置目录存在。"""
+    def ensure_config_dir(cls) -> bool:
+        """确保配置目录存在；不可创建时记录并返回 False，不抛出。"""
         config_dir, _, _ = cls._get_paths()
-        config_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            config_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error("Failed to create config dir %s: %s", config_dir, e)
+            return False
+        return True
 
     @classmethod
     def load_settings(cls) -> dict[str, Any]:
@@ -65,7 +70,7 @@ class ConfigManager:
         try:
             with open(settings_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
+        except (ValueError, OSError) as e:
             logger.warning("Failed to load settings: %s", e)
             return {}
 
@@ -93,7 +98,7 @@ class ConfigManager:
         try:
             with open(quick_send_file, "r", encoding="utf-8") as f:
                 raw_items = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
+        except (ValueError, OSError) as e:
             logger.warning("Failed to load quick sends: %s", e)
             return []
         if not isinstance(raw_items, list):
@@ -117,7 +122,7 @@ class ConfigManager:
             checksum_start = int(checksum_start)
         except (OverflowError, TypeError, ValueError):
             checksum_start = 1
-        if checksum_start < 1:
+        if not 1 <= checksum_start <= 9999:
             checksum_start = 1
 
         checksum_end_mode = item.get("checksum_end_mode", 0)

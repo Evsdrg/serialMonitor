@@ -108,6 +108,47 @@ class TestConfigManager:
             result = ConfigManager.load_quick_sends()
             assert result == []
 
+    def test_load_settings_survives_non_utf8_file(self, tmp_path):
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_bytes(b'{"language": "\xff\xfe"}')
+
+        with patch.object(ConfigManager, "_CONFIG_DIR", tmp_path):
+            ConfigManager._SETTINGS_FILE = settings_file
+            ConfigManager._QUICK_SEND_FILE = tmp_path / "quick_sends.json"
+            assert ConfigManager.load_settings() == {}
+
+    def test_load_quick_sends_survives_non_utf8_file(self, tmp_path):
+        quick_send_file = tmp_path / "quick_sends.json"
+        quick_send_file.write_bytes(b'[{"content": "\xff\xfe"}]')
+
+        with patch.object(ConfigManager, "_CONFIG_DIR", tmp_path):
+            ConfigManager._SETTINGS_FILE = tmp_path / "settings.json"
+            ConfigManager._QUICK_SEND_FILE = quick_send_file
+            assert ConfigManager.load_quick_sends() == []
+
+    def test_save_settings_survives_unwritable_config_dir(self, tmp_path):
+        blocked = tmp_path / "blocked"
+        blocked.write_text("not a directory", encoding="utf-8")
+        config_dir = blocked / "config"
+
+        with patch.object(ConfigManager, "_CONFIG_DIR", config_dir):
+            ConfigManager._SETTINGS_FILE = config_dir / "settings.json"
+            ConfigManager._QUICK_SEND_FILE = config_dir / "quick_sends.json"
+            ConfigManager.save_settings({"language": "zh"})
+            ConfigManager.save_quick_sends([{"content": "AT"}])
+
+    def test_quick_send_checksum_start_upper_bound(self, tmp_path):
+        quick_send_file = tmp_path / "quick_sends.json"
+        with open(quick_send_file, "w", encoding="utf-8") as f:
+            json.dump([{"content": "AT", "checksum_start": 10**400}], f)
+
+        with patch.object(ConfigManager, "_CONFIG_DIR", tmp_path):
+            ConfigManager._SETTINGS_FILE = tmp_path / "settings.json"
+            ConfigManager._QUICK_SEND_FILE = quick_send_file
+            items = ConfigManager.load_quick_sends()
+
+        assert items[0]["checksum_start"] == 1
+
     def test_load_quick_sends_sanitizes_malformed_items(self, tmp_path):
         quick_send_file = tmp_path / "quick_sends.json"
         with open(quick_send_file, "w", encoding="utf-8") as f:

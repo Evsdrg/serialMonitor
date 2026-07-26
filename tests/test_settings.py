@@ -84,6 +84,35 @@ def test_all_protocol_checksum_end_modes_round_trip():
         assert settings.checksum_end_mode == mode
 
 
+def test_huge_integer_network_timeout_falls_back():
+    settings = AppSettings.from_dict(
+        {
+            "schema_version": 2,
+            "connections": {"rfc2217": {"network_timeout": 10**400}},
+        }
+    )
+
+    assert settings.rfc2217.network_timeout == 3.0
+
+
+def test_out_of_range_integers_fall_back():
+    settings = AppSettings.from_dict(
+        {
+            "schema_version": 2,
+            "connections": {},
+            "theme_index": 7,
+            "checksum_start": 10**400,
+            "max_terminal_lines": 10**400,
+            "trim_batch_lines": 10**400,
+        }
+    )
+
+    assert settings.theme_index == 0
+    assert settings.checksum_start == 1
+    assert settings.max_terminal_lines == 5000
+    assert settings.trim_batch_lines == 800
+
+
 def test_non_finite_network_timeout_falls_back():
     settings = AppSettings.from_dict(
         {

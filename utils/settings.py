@@ -36,7 +36,7 @@ def _number(value: Any, default: float, *, minimum: float | None = None) -> floa
         return default
     try:
         result = float(value)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return default
     if not math.isfinite(result):
         return default
@@ -200,7 +200,9 @@ class AppSettings:
         return cls(
             geometry=_valid_geometry(data.get("geometry")),
             language=language,
-            theme_index=_integer(data.get("theme_index"), 0, minimum=0),
+            theme_index=_integer(
+                data.get("theme_index"), 0, minimum=0, maximum=2
+            ),
             connection_mode=mode,
             serial=SerialSettings.from_dict(serial_data),
             tcp=TcpSettings.from_dict(tcp_data),
@@ -212,17 +214,19 @@ class AppSettings:
             enable_ansi_colors=_boolean(data.get("enable_ansi_colors"), True),
             auto_reconnect=_boolean(data.get("auto_reconnect"), False),
             auto_checksum=_boolean(data.get("auto_checksum"), False),
-            checksum_start=_integer(data.get("checksum_start"), 1, minimum=1),
+            checksum_start=_integer(
+                data.get("checksum_start"), 1, minimum=1, maximum=9999
+            ),
             checksum_end_mode=_integer(
                 data.get("checksum_end_mode"), 0, minimum=0, maximum=4
             ),
             terminal_mode=_boolean(data.get("terminal_mode"), False),
             trim_enabled=_boolean(data.get("trim_enabled"), True),
             max_terminal_lines=_integer(
-                data.get("max_terminal_lines"), 5000, minimum=1
+                data.get("max_terminal_lines"), 5000, minimum=1, maximum=10_000_000
             ),
             trim_batch_lines=_integer(
-                data.get("trim_batch_lines"), 800, minimum=1
+                data.get("trim_batch_lines"), 800, minimum=1, maximum=10_000_000
             ),
         )
 
