@@ -143,6 +143,21 @@ def rfc_handler():
     handler.shutdown()
 
 
+class TestRfc2217ControlContext:
+    """P2: control 上下文必须映射到 CONTROL 操作"""
+
+    def test_control_error_maps_to_control_operation(self, rfc_handler, qtbot):
+        worker = Mock()
+        rfc_handler._worker = worker
+        rfc_handler._state = TransportState.CONNECTED
+
+        with qtbot.waitSignal(rfc_handler.transport_error, timeout=1000) as blocker:
+            rfc_handler._on_worker_error(worker, "dtr failed", "control")
+
+        assert blocker.args[0].operation is TransportOperation.CONTROL
+        assert blocker.args[0].reason is DisconnectReason.IO_ERROR
+
+
 class TestRfc2217UserDisconnectReason:
     """P1: 用户主动断开时，后到的 worker 错误不得改写断开原因"""
 

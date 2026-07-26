@@ -123,6 +123,18 @@ class TestSuppressStderr:
 # ── _set_app_icon ───────────────────────────────────────
 
 
+
+class _FakeIcon:
+    """测试替身：显式控制 QIcon 是否可用，避免断言缺失。"""
+
+    def __init__(self, path: str, null: bool) -> None:
+        self.path = path
+        self._null = null
+
+    def isNull(self) -> bool:
+        return self._null
+
+
 class TestSetAppIcon:
     def _get_app(self):
         """获取或创建 QApplication 实例。"""
@@ -138,48 +150,68 @@ class TestSetAppIcon:
         # 不抛异常即可
         _set_app_icon(app)
 
-    def test_set_app_icon_with_existing_file(self, tmp_path):
-        """图标文件存在时应设置。"""
-        # 创建一个假的"图标"文件（PNG 头几个字节）
+    def test_set_app_icon_with_existing_file(self, tmp_path, monkeypatch):
+        """图标文件存在且可加载时必须调用 setWindowIcon。"""
         icon_path = tmp_path / "终端.png"
         icon_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
         app = self._get_app()
+        calls = []
+        monkeypatch.setattr(app, "setWindowIcon", lambda icon: calls.append(icon))
+        monkeypatch.setattr("app.QIcon", lambda path: _FakeIcon(path, null=False))
         with patch("app.BASE_DIR", tmp_path):
             _set_app_icon(app)
-        # 无异常即视为通过
 
-    def test_set_app_icon_invalid_png(self, tmp_path):
-        """无效的 PNG 文件应被跳过。"""
+        assert len(calls) == 1
+        assert calls[0].path == str(icon_path)
+
+    def test_set_app_icon_invalid_png(self, tmp_path, monkeypatch):
+        """无效的 PNG 文件不得设置图标。"""
         bad_png = tmp_path / "终端.png"
         bad_png.write_bytes(b"not a real png")
 
         app = self._get_app()
+        calls = []
+        monkeypatch.setattr(app, "setWindowIcon", lambda icon: calls.append(icon))
+        monkeypatch.setattr("app.QIcon", lambda path: _FakeIcon(path, null=True))
         with patch("app.BASE_DIR", tmp_path):
-            # 不应抛异常
             _set_app_icon(app)
 
-    def test_set_app_icon_ico(self, tmp_path):
-        """`.ico` 文件也应支持。"""
+        assert calls == []
+
+    def test_set_app_icon_ico(self, tmp_path, monkeypatch):
+        """`.ico` 文件也应被采用。"""
         ico_path = tmp_path / "favicon.ico"
         ico_path.write_bytes(b"\x00\x00\x01\x00" + b"\x00" * 100)
 
         app = self._get_app()
+        calls = []
+        monkeypatch.setattr(app, "setWindowIcon", lambda icon: calls.append(icon))
+        monkeypatch.setattr("app.QIcon", lambda path: _FakeIcon(path, null=False))
         with patch("app.BASE_DIR", tmp_path):
             _set_app_icon(app)
 
-    def test_set_app_icon_falls_back_to_cwd(self, tmp_path):
-        """BASE_DIR 无图标时，cwd 应作为后备。"""
+        assert len(calls) == 1
+        assert calls[0].path == str(ico_path)
+
+    def test_set_app_icon_falls_back_to_cwd(self, tmp_path, monkeypatch):
+        """BASE_DIR 无图标时，必须从 cwd 采用图标。"""
         icon_in_cwd = tmp_path / "终端.png"
         icon_in_cwd.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
         app = self._get_app()
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
+        calls = []
+        monkeypatch.setattr(app, "setWindowIcon", lambda icon: calls.append(icon))
+        monkeypatch.setattr("app.QIcon", lambda path: _FakeIcon(path, null=False))
 
         with patch("app.BASE_DIR", empty_dir), \
              patch("pathlib.Path.cwd", return_value=tmp_path):
             _set_app_icon(app)
+
+        assert len(calls) == 1
+        assert calls[0].path == str(icon_in_cwd)
 
     def test_set_app_icon_handles_exception(self, tmp_path):
         """`_set_app_icon` 在 QIcon 抛异常时应静默跳过。"""

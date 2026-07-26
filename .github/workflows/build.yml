@@ -146,6 +146,27 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller SerialMonitor.spec
 
+      - name: Smoke test frozen executable
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath dist/SerialMonitor.exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($proc.HasExited) {
+            Write-Error "SerialMonitor.exe exited early with code $($proc.ExitCode)"
+            exit 1
+          }
+          Stop-Process -Id $proc.Id -Force
+          exit 0
+
+      - name: Verify no developer config is bundled
+        shell: pwsh
+        run: |
+          if (Test-Path dist/config/settings.json) {
+            Write-Error "developer settings.json leaked into the bundle"
+            exit 1
+          }
+          exit 0
+
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:

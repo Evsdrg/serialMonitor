@@ -124,7 +124,7 @@ class TestSearchBarSignals:
         bar.update_result(2, 5)
         assert bar.result_label.text() == "2 / 5"
 
-    def test_set_no_result(self, qtbot):
+    def test_set_no_result_after_existing_result(self, qtbot):
         bar = SearchBar()
         qtbot.addWidget(bar)
         bar.update_result(3, 3)

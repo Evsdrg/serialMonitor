@@ -12,7 +12,7 @@ from unittest.mock import patch
 from utils.config_manager import ConfigManager, _get_config_dir
 
 
-class TestGetConfigDir:
+class TestGetConfigDirDevelopment:
     def test_development_mode(self):
         with patch.object(ConfigManager, "_CONFIG_DIR", None):
             config_dir = _get_config_dir()
@@ -270,7 +270,7 @@ class TestConfigManager:
         assert ConfigManager.load_app_settings() == expected
 
 
-class TestGetConfigDir:
+class TestGetConfigDirFrozen:
     def test_frozen_mode(self):
         import sys as sys_mod
         with patch.object(sys_mod, "frozen", True, create=True), \

@@ -11,6 +11,50 @@ from core.socket_handler import SocketHandler
 from core.transport import DisconnectReason, TransportState
 
 
+class TestSocketCloseWatchdog:
+    """P2: 关闭看门狗与远端断开分类必须有测试覆盖"""
+
+    def test_watchdog_aborts_stuck_closing_socket(self, qtbot):
+        handler = SocketHandler()
+        handler._state = TransportState.CONNECTED
+        handler._session_active = True
+        handler._connected_once = True
+
+        handler._abort_closing_socket(handler._socket, DisconnectReason.USER)
+        assert handler.state is TransportState.CONNECTED
+
+        handler._state = TransportState.CLOSING
+        handler._abort_closing_socket(handler._socket, DisconnectReason.USER)
+
+        assert handler.state is TransportState.DISCONNECTED
+
+    def test_stale_socket_signal_is_ignored(self, qtbot):
+        handler = SocketHandler()
+        handler._state = TransportState.CONNECTED
+        handler._session_active = True
+        old_socket = handler._socket
+        handler._replace_socket()
+
+        received: list[bytes] = []
+        handler.data_received.connect(received.append)
+        old_socket.readyRead.emit()
+
+        assert received == []
+
+    def test_remote_close_after_connect_is_remote_reason(self, qtbot):
+        handler = SocketHandler()
+        handler._state = TransportState.CONNECTED
+        handler._session_active = True
+        handler._connected_once = True
+        handler._manual_close = False
+
+        transitions = []
+        handler.state_changed.connect(transitions.append)
+        handler._on_disconnected()
+
+        assert transitions[-1].reason is DisconnectReason.REMOTE
+
+
 class TestSocketConnectTimeout:
     """P1: 连接必须有超时，否则黑洞地址会永久 CONNECTING"""
 

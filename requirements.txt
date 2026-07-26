@@ -1,5 +1,11 @@
 PyQt6==6.11.0
+# 传递依赖显式固定，避免 CI 与本地取到不同版本（曾出现 pyqt6-qt6 6.11.0 vs 6.11.1）
+PyQt6-Qt6==6.11.0
+PyQt6_sip==13.11.1
 # Unreleased upstream fix for Python 3.10+ threading deprecations.
 pyserial @ git+https://github.com/pyserial/pyserial.git@17f8cc3480bd2762a53efed667295334ae76762a
 pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.4
+altgraph==0.17.5
+packaging==26.0
 pyqtdarktheme==0.1.7

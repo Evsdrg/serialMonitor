@@ -9,7 +9,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('终端.png', '.'),
-        ('config', 'config'),
+        # 只带目录占位，不打包开发者本地的 config/*.json
+        ('config/.gitkeep', 'config'),
         ('utils/custom_style_dark.qss', 'utils'),
         ('utils/custom_style_light.qss', 'utils'),
     ],
